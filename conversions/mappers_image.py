@@ -51,8 +51,8 @@ class MappersImage:
         perspective_images = torch.nn.functional.grid_sample(
             equirectangular_images.flatten(0, -4).permute(0, 3, 1, 2).float(),
             cr_normalized_grid.flatten(0, -4),
-            mode='bilinear', padding_mode='border',
-            align_corners=None).permute(0, 2, 3, 1)
+            mode='bicubic', padding_mode='border',
+            align_corners=True).permute(0, 2, 3, 1)
         perspective_images = perspective_images.view(*equirectangular_images.shape[:-3], self.cfg.crop_height,
                                                      self.cfg.crop_width, -1)
 
@@ -92,7 +92,7 @@ class MappersImage:
         eq_recon = torch.nn.functional.grid_sample(
             perspective_images.float(),
             grid,
-            mode='bilinear',
+            mode='bicubic',
             padding_mode='zeros',
             align_corners=True
         )  # (B, 3, H_eq, W_eq)

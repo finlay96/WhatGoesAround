@@ -69,9 +69,9 @@ class ArgusCoTracker(torch.nn.Module):
         if noise_conditioning:
             conditional_video_equi = torch.where(mask == 1, input_video,
                                                  torch.randn_like(input_video, device=self.accelerator.device))
-        conditional_video_equi = conditional_video_equi.unsqueeze(0)
+        conditional_video_equi = conditional_video_equi.unsqueeze(0).to(device=self.accelerator.device)
         hw_ratio = conditional_video_pers.shape[-2] / conditional_video_pers.shape[-1]
-        mask = mask.unsqueeze(0)
+        mask = mask.unsqueeze(0).to(device=self.accelerator.device)
         conditional_video_pers = conditional_video_pers.unsqueeze(0)
 
         with torch.autocast(str(self.accelerator.device).replace(":0", ""),
@@ -84,45 +84,83 @@ class ArgusCoTracker(torch.nn.Module):
             generated_latents = None
             generated_latents_this = None
             generated_frames_this = None
+            all_extracted_latents = None
             num_frames_processed = 0
             blend_frames = self.argus_config.blend_frames if hasattr(self.argus_config, 'blend_frames') else 0
             round = 0
 
-            # TODO the frame length should be greater than 25 if possible
-            num_frames_to_process = min(num_frames_batch, num_frames_remaining)
-            conditional_video_input = conditional_video_equi[:, :num_frames_to_process] if round == 0 else \
-                torch.cat([generated_frames_this[:, :, -blend_frames:].permute(0, 2, 1, 3, 4),
-                           conditional_video_equi[
-                               :, num_frames_processed + blend_frames: num_frames_processed + num_frames_to_process]],
-                          dim=1)
-            mask_this = mask[:, num_frames_processed: num_frames_processed + num_frames_to_process]
-            conditional_video_pers_this = conditional_video_pers[
-                :, num_frames_processed: num_frames_processed + num_frames_to_process]
-            conditional_video_input = conditional_video_input + torch.randn_like(conditional_video_input,
-                                                                                 device=self.accelerator.device) * self.argus_config.noise_aug_strength * mask_this
+            while num_frames_remaining > 0:
+                # TODO the frame length should be greater than 25 if possible
+                num_frames_to_process = min(num_frames_batch, num_frames_remaining)
+                conditional_video_input = conditional_video_equi[:, :num_frames_to_process] if round == 0 else \
+                    torch.cat([generated_frames_this[:, :, -blend_frames:].permute(0, 2, 1, 3, 4),
+                               conditional_video_equi[
+                                   :, num_frames_processed + blend_frames: num_frames_processed + num_frames_to_process]],
+                              dim=1)
+                mask_this = mask[:, num_frames_processed: num_frames_processed + num_frames_to_process]
+                conditional_video_pers_this = conditional_video_pers[
+                    :, num_frames_processed: num_frames_processed + num_frames_to_process]
+                conditional_video_input = conditional_video_input.to() + torch.randn_like(conditional_video_input,
+                                                                                     device=self.accelerator.device) * self.argus_config.noise_aug_strength * mask_this
 
-            fps = 3.0  # TODO hardcoded for now
+                fps = 3.0  # TODO hardcoded for now
 
-            # TODO need to get the unet outputs - now we also need to get the eq frames stuff in there from the other bit too
-            generated_latents_this, all_extracted_latents = self.argus_pipeline(
-                conditional_video_input,  # (1, T, C, H, W)
-                conditional_images=conditional_video_pers_this,  # (1, T, C, H, W)
-                height=self.argus_config.height,
-                width=self.argus_config.width,
-                num_frames=num_frames_to_process,
-                decode_chunk_size=self.argus_config.decode_chunk_size,
-                motion_bucket_id=127,
-                fps=fps,
-                num_inference_steps=self.argus_config.num_inference_steps,
-                # num_inference_steps=1,  # 50 # 25 # TODO need to change this ideally to 50
-                noise_aug_strength=self.argus_config.noise_aug_strength,
-                min_guidance_scale=self.argus_config.guidance_scale,
-                max_guidance_scale=self.argus_config.guidance_scale,
-                inference_final_rotation=self.argus_config.inference_final_rotation,
-                blend_decoding_ratio=self.argus_config.blend_decoding_ratio,
-                extended_decoding=self.argus_config.extended_decoding,
-                rotation_during_inference=self.argus_config.rotation_during_inference,
-                return_latents=True,
-            )  # [B, T, C, H, W]
+                # TODO need to get the unet outputs - now we also need to get the eq frames stuff in there from the other bit too
+                generated_latents_this, extracted_latents_this = self.argus_pipeline(
+                    conditional_video_input,  # (1, T, C, H, W)
+                    conditional_images=conditional_video_pers_this,  # (1, T, C, H, W)
+                    height=self.argus_config.height,
+                    width=self.argus_config.width,
+                    num_frames=num_frames_to_process,
+                    decode_chunk_size=self.argus_config.decode_chunk_size,
+                    motion_bucket_id=127,
+                    fps=fps,
+                    num_inference_steps=self.argus_config.num_inference_steps,
+                    # num_inference_steps=1,  # 50 # 25 # TODO need to change this ideally to 50
+                    noise_aug_strength=self.argus_config.noise_aug_strength,
+                    min_guidance_scale=self.argus_config.guidance_scale,
+                    max_guidance_scale=self.argus_config.guidance_scale,
+                    inference_final_rotation=self.argus_config.inference_final_rotation,
+                    blend_decoding_ratio=self.argus_config.blend_decoding_ratio,
+                    extended_decoding=self.argus_config.extended_decoding,
+                    rotation_during_inference=self.argus_config.rotation_during_inference,
+                    return_latents=True,
+                )  # [B, T, C, H, W]
+                if blend_frames != 0:  # save current generation results into a file
+                    generated_frames_this = self.argus_pipeline.decode_latents(generated_latents_this, num_frames_to_process,
+                                                                    decode_chunk_size=self.argus_config.decode_chunk_size,
+                                                                    extended_decoding=self.argus_config.extended_decoding,
+                                                                    blend_decoding_ratio=self.argus_config.blend_decoding_ratio)
+                #     generated_frames_this_save = ((generated_frames_this.clamp(-1, 1) + 1) * 127.5).cpu().to(
+                #         torch.float32).numpy().astype(np.uint8)
+                #     generated_frames_this_save = generated_frames_this_save[0].transpose(1, 2, 3, 0)  # (T, H, W, C)
+                #     save_path = out_file_path.replace(ext, f"_output_fov{fov_x:.0f}_hw{hw_ratio:.2f}_round{round}.mp4")
+                #     mimsave(save_path, generated_frames_this_save, fps=fps)
+                if generated_latents is None:
+                    generated_latents = generated_latents_this
+                    all_extracted_latents = extracted_latents_this
+                else:
+                    blend_weight = torch.linspace(1, 0, blend_frames, device=self.accelerator.device,
+                                                  dtype=generated_latents.dtype).view(1, blend_frames, 1, 1, 1)
+                    generated_latents = torch.cat([generated_latents[:, :-blend_frames],
+                                                   blend_weight * generated_latents[:, -blend_frames:] + (
+                                                               1 - blend_weight) * generated_latents_this[
+                                                       :, :blend_frames],
+                                                   generated_latents_this[:, blend_frames:]], dim=1)
+                    # TODO doesnt work for greater than 1 batchsize and untested currently
+                    for k1 in all_extracted_latents.keys():
+                        for k2 in all_extracted_latents[k1].keys():
+                            all_extracted_latents[k1][k2] = torch.cat(
+                                [all_extracted_latents[k1][k2][:-blend_frames],
+                                 blend_weight[0] * all_extracted_latents[k1][k2][-blend_frames:] + (
+                                         1 - blend_weight[0]) * extracted_latents_this[k1][k2][:blend_frames],
+                                 extracted_latents_this[k1][k2][blend_frames:]], dim=0)
 
-        return generated_latents_this, all_extracted_latents
+                if num_frames_remaining == num_frames_to_process:
+                    break
+
+                num_frames_remaining -= (num_frames_to_process - blend_frames)
+                num_frames_processed += (num_frames_to_process - blend_frames)
+                round += 1
+
+        return generated_latents, all_extracted_latents

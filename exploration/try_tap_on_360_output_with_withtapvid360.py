@@ -28,8 +28,8 @@ from metrics.tapvid360_metrics import compute_metrics
 from utils import DecordVideoReader, draw_point
 from visualise import Visualiser, visualize_perspective_view
 
-
 FORCE_RUN = False
+
 
 def visualise_and_save_points(
         frames_to_visualise: torch.Tensor,

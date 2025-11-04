@@ -104,3 +104,58 @@ def update_rotation_matrix(R: torch.Tensor, d_alpha: torch.Tensor, d_beta: torch
     R_new = R @ R_delta.to(R.device)  # Shape (B, 3, 3)
 
     return R_new
+
+
+# TODO NEEDS TESTING
+def rot_to_euler_xyz(R: torch.Tensor, degrees: bool = False) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Converts batched 3x3 rotation matrices (X-Y-Z order) to Euler angles (roll, pitch, yaw).
+
+    Args:
+        R: Rotation matrices of shape (..., 3, 3).
+        degrees: Whether to return angles in degrees.
+
+    Returns:
+        A tuple of (alpha, beta, gamma) angles in radians (or degrees)
+        with the same batch shape as R (...).
+    """
+    # R[..., 0, 2] = sin(beta)
+    # We must clamp the input to asin to avoid NaNs from floating point inaccuracies
+    sin_beta = torch.clamp(R[..., 0, 2], -1.0, 1.0)
+    beta = torch.asin(sin_beta)
+
+    # Check for gimbal lock
+    # This occurs when beta is +/- 90 degrees (cos(beta) = 0)
+    epsilon = 1e-6  # A small tolerance for floating point comparison
+    is_gimbal_lock = sin_beta.abs() > (1.0 - epsilon)
+
+    # --- Normal Case (no gimbal lock) ---
+    # alpha = atan2(-R[..., 1, 2], R[..., 2, 2])
+    # gamma = atan2(-R[..., 0, 1], R[..., 0, 0])
+    alpha_normal = torch.atan2(-R[..., 1, 2], R[..., 2, 2])
+    gamma_normal = torch.atan2(-R[..., 0, 1], R[..., 0, 0])
+
+    # --- Gimbal Lock Case ---
+    # We set alpha (roll) to 0 by convention
+    alpha_gimbal = torch.zeros_like(beta)
+
+    # We can solve for gamma using other elements
+    # R[..., 1, 0] = sin(alpha)*sin(beta)*cos(gamma) + cos(alpha)*sin(gamma)
+    # R[..., 1, 1] = -sin(alpha)*sin(beta)*sin(gamma) + cos(alpha)*cos(gamma)
+    # If alpha = 0:
+    # R[..., 1, 0] = sin(gamma)
+    # R[..., 1, 1] = cos(gamma)
+    # So, gamma = atan2(R[..., 1, 0], R[..., 1, 1])
+    # This formula holds for both +90 and -90 deg gimbal lock.
+    gamma_gimbal = torch.atan2(R[..., 1, 0], R[..., 1, 1])
+
+    # Combine using torch.where
+    alpha = torch.where(is_gimbal_lock, alpha_gimbal, alpha_normal)
+    gamma = torch.where(is_gimbal_lock, gamma_gimbal, gamma_normal)
+
+    if degrees:
+        alpha = torch.rad2deg(alpha)
+        beta = torch.rad2deg(beta)
+        gamma = torch.rad2deg(gamma)
+
+    return alpha, beta, gamma
