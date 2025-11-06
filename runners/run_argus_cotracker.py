@@ -24,17 +24,18 @@ from runners.bbox_utils import xywh_to_xyxy, get_bbox_xyxy_from_points, bbox_iou
 # make the original perspective image overlay on the equirectangular
 
 
-JUST_GET_LATENTS = False
-JUST_GET_PRED_EQ_FRAMES = True
-USE_GT_POSES = False
+JUST_GET_LATENTS = True
+JUST_GET_PRED_EQ_FRAMES = False
+USE_GT_POSES = True
 
 
 @dataclasses.dataclass
 class Settings:
     # ds_root = Path("/media/finlay/BigDaddyDrive/Outputs/tracker/tapvid360")
     ds_name = "tapvid360-10k"
-    specific_video_names = "-73Nyd_QcNc_clip_0003/0"
-    ds_root = Path("/home/userfs/f/fgch500/storage/datasets/tracking")
+    # specific_video_names = "-73Nyd_QcNc_clip_0003/0"
+    specific_video_names = None
+    ds_root = Path("/mnt/scratch/projects/cs-dclabs-2019/tapvid360/outputs")
 
     # ds_name = "lasot_oov"
     # # specific_video_names = "mouse-15/clip_000"
@@ -42,7 +43,7 @@ class Settings:
     # specific_video_names = None
     # ds_root = Path("/home/userfs/f/fgch500/storage/datasets/tracking/object_tracking/LaSOT/custom_out_of_frame_clips")
 
-    out_root = Path("/home/userfs/f/fgch500/storage/shared/WhatGoesAround")
+    out_root = Path("/mnt/scratch/projects/cs-dclabs-2019/WhatGoesAround")
 
     # ds_root = Path("/media/finlay/BigDaddyDrive/Datasets/tracking/object-tracking/LaSOT/custom_out_of_frame_clips")
     # poses_root = Path("/media/finlay/BigDaddyDrive/Outputs/tracker/whatGoesAround/estimated_poses")
@@ -50,9 +51,9 @@ class Settings:
     # latents_root = Path("/media/finlay/BigDaddyDrive/Outputs/tracker/whatGoesAround/argus_feats")
     # sam_checkpoint = Path("/home/finlay/Shared/pretrained_models/segmentation") / "sam2" / "sam2_hiera_large.pt"
 
-    poses_root = Path("/home/userfs/f/fgch500/storage/shared/WhatGoesAround/estimated_poses")
-    unet_path = "/home/userfs/f/fgch500/storage/pretrained_models/video_generation/argus"
-    latents_root = Path("/home/userfs/f/fgch500/storage/shared/WhatGoesAround/argus_feats")
+    poses_root = Path("/mnt/scratch/projects/cs-dclabs-2019/WhatGoesAround/estimated_poses")
+    unet_path = "/mnt/scratch/projects/cs-dclabs-2019/WhatGoesAround/pretrained_models/argus"
+    latents_root = Path("/mnt/scratch/projects/cs-dclabs-2019/WhatGoesAround/argus_feats")
     sam_checkpoint = Path(
         "/home/userfs/f/fgch500/storage/pretrained_models/segmentation") / "sam2" / "sam2_hiera_large.pt"
     force_get_latents = False
