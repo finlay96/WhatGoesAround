@@ -147,7 +147,7 @@ def main(device, settings):
         out_root = out_root / f"gt_poses-{USE_GT_POSES}"
     out_root.mkdir(exist_ok=True, parents=True)
     args = _get_args()
-    if args.split_filename is not None:
+    if args.split_file is not None:
         with open(args.split_file, "r") as f:
             settings.specific_video_names = json.load(f)
     dataset, dl = get_dataset(settings.ds_root, settings.ds_name, settings.specific_video_names)
