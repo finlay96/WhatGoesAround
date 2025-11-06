@@ -1,4 +1,6 @@
+import argparse
 import dataclasses
+import json
 from pathlib import Path
 
 import cv2
@@ -28,6 +30,17 @@ JUST_GET_LATENTS = True
 JUST_GET_PRED_EQ_FRAMES = False
 USE_GT_POSES = True
 
+
+def _get_args():
+    parser = argparse.ArgumentParser(description=".")
+    parser.add_argument(
+        '--split_file',  # The name of the flag
+        type=str,  # The type of value to expect
+        default=None,  # The default value if the flag is not provided
+        help="Optional: Path to the input file."  # Help message
+    )
+
+    return parser.parse_args()
 
 @dataclasses.dataclass
 class Settings:
@@ -132,6 +145,10 @@ def main(device, settings):
     if settings.ds_name == "tapvid360-10k":
         out_root = out_root / f"gt_poses-{USE_GT_POSES}"
     out_root.mkdir(exist_ok=True, parents=True)
+    args = _get_args()
+    if args.split_filename is not None:
+        with open(args.split_filename ,"r") as f:
+            settings.specific_video_names = json.load(args.split_filename)
     dataset, dl = get_dataset(settings.ds_root, settings.ds_name, settings.specific_video_names)
 
     accelerator = Accelerator(mixed_precision='no')
