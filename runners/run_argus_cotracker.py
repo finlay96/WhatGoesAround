@@ -66,7 +66,7 @@ class Settings:
     # sam_checkpoint = Path("/home/finlay/Shared/pretrained_models/segmentation") / "sam2" / "sam2_hiera_large.pt"
 
     poses_root = Path("/mnt/scratch/projects/cs-dclabs-2019/WhatGoesAround/estimated_poses")
-    unet_path = "/mnt/scratch/projects/cs-dclabs-2019/WhatGoesAround/pretrained_models/argus"
+    unet_path = "/mnt/scratch/projects/cs-dclabs-2019/WhatGoesAround/pretrained_models/argus/checkpoints"
     latents_root = Path("/mnt/scratch/projects/cs-dclabs-2019/WhatGoesAround/argus_feats")
     sam_checkpoint = Path(
         "/home/userfs/f/fgch500/storage/pretrained_models/segmentation") / "sam2" / "sam2_hiera_large.pt"
@@ -153,9 +153,10 @@ def main(device, settings):
     dataset, dl = get_dataset(settings.ds_root, settings.ds_name, settings.specific_video_names)
 
     accelerator = Accelerator(mixed_precision='no')
-    vae, sam_pred_video, sam_pred_image, cotracker = get_models(settings.sam_checkpoint, accelerator,
-                                                                accelerator.device, debug_skip_vae=False)
-    sam_runner = SAMRunner(sam_img_pred=sam_pred_image, sam_video_pred=sam_pred_video)
+    if not (JUST_GET_LATENTS or JUST_GET_PRED_EQ_FRAMES):
+        vae, sam_pred_video, sam_pred_image, cotracker = get_models(settings.sam_checkpoint, accelerator,
+                                                                    accelerator.device, debug_skip_vae=False)
+        sam_runner = SAMRunner(sam_img_pred=sam_pred_image, sam_video_pred=sam_pred_video)
     for data in tqdm(dl):
         vid_out_dir = out_root / data.seq_name[0]
         vid_out_dir.mkdir(exist_ok=True, parents=True)
