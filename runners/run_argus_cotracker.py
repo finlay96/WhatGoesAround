@@ -42,6 +42,7 @@ def _get_args():
 
     return parser.parse_args()
 
+
 @dataclasses.dataclass
 class Settings:
     # ds_root = Path("/media/finlay/BigDaddyDrive/Outputs/tracker/tapvid360")
@@ -147,8 +148,8 @@ def main(device, settings):
     out_root.mkdir(exist_ok=True, parents=True)
     args = _get_args()
     if args.split_filename is not None:
-        with open(args.split_filename ,"r") as f:
-            settings.specific_video_names = json.load(args.split_filename)
+        with open(args.split_file, "r") as f:
+            settings.specific_video_names = json.load(f)
     dataset, dl = get_dataset(settings.ds_root, settings.ds_name, settings.specific_video_names)
 
     accelerator = Accelerator(mixed_precision='no')
