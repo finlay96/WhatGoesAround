@@ -12,8 +12,10 @@ from tqdm import tqdm
 
 from conversions.mapper import Mappers
 from conversions.rotations import rot, rot_to_euler_xyz
+from data.dataloader import TAPVid360Dataset
 from data.dataloader_lasot import LaSOTDataset
 from exploration.argus_src.src import focal2fov, rotation_matrix_to_euler, pers2equi_batch
+from metrics.tapvid360_metrics import compute_metrics
 from runners.vis_utils import overlay_mask_over_image
 from runners.model_utils import get_models, decode_latents, get_360_latents_model, SAMRunner
 from runners.utils import get_object_centred_persp_imgs, get_dataset, overlay_orig_persp_on_pred_eq
@@ -26,9 +28,11 @@ from runners.bbox_utils import xywh_to_xyxy, get_bbox_xyxy_from_points, bbox_iou
 # make the original perspective image overlay on the equirectangular
 
 
-JUST_GET_LATENTS = True
+JUST_GET_LATENTS = False
 JUST_GET_PRED_EQ_FRAMES = False
 USE_GT_POSES = True
+SKIP_IF_EXISTS = False
+ONLY_IF_LATENTS_EXIST = True
 
 
 def _get_args():
@@ -43,37 +47,65 @@ def _get_args():
     return parser.parse_args()
 
 
+def run_through_cotracker(co_tracker, batchsize, device, persp_imgs, persp_pos_points):
+    video_resize, _, query_points = co_tracker.preprocess(persp_imgs, query_points=persp_pos_points,
+                                                          seg_mask=None, device=device)
+    all_pred_tracks = []
+    all_pred_vis = []
+    for bs in range(0, len(persp_imgs), batchsize):
+        pred_tracks_batch, pred_vis_batch = co_tracker.run(video_resize[bs:bs + batchsize].contiguous(),
+                                                           query_points=query_points[bs:bs + batchsize].contiguous())
+        all_pred_tracks.append(pred_tracks_batch)
+        all_pred_vis.append(pred_vis_batch)
+    all_pred_tracks = torch.vstack(all_pred_tracks)
+    all_pred_vis = torch.vstack(all_pred_vis)
+    # Rescale the cotracker points back to expected image size
+    all_pred_tracks = co_tracker.rescale_points(all_pred_tracks, co_tracker.interp_shape,
+                                                persp_imgs.shape[-3:-1])
+
+    return all_pred_tracks, all_pred_vis
+
+
 @dataclasses.dataclass
 class Settings:
-    # ds_root = Path("/media/finlay/BigDaddyDrive/Outputs/tracker/tapvid360")
     ds_name = "tapvid360-10k"
     # specific_video_names = "-73Nyd_QcNc_clip_0003/0"
-    specific_video_names = None
-    ds_root = Path("/mnt/scratch/projects/cs-dclabs-2019/tapvid360/outputs")
+    # specific_video_names = None
+    specific_video_names = ["AfXjCJcexSI_clip_0010/0"] #"nqR-umO4bvY_clip_0006/0"
+    # specific_video_names = ["FNZfTX4eezk_clip_0073/1", "FNZfTX4eezk_clip_0073/2", "hDaOt30dHn8_clip_0195/0"]
+    # ds_root = Path("/mnt/scratch/projects/cs-dclabs-2019/tapvid360/outputs")
 
     # ds_name = "lasot_oov"
     # # specific_video_names = "mouse-15/clip_000"
     # # specific_video_names = "kite-5/clip_000"
     # specific_video_names = None
     # ds_root = Path("/home/userfs/f/fgch500/storage/datasets/tracking/object_tracking/LaSOT/custom_out_of_frame_clips")
+    # out_root = Path("/mnt/scratch/projects/cs-dclabs-2019/WhatGoesAround")
 
-    out_root = Path("/mnt/scratch/projects/cs-dclabs-2019/WhatGoesAround")
+    unet_path = "/home/userfs/f/fgch500/storage/pretrained_models/video_generation/argus"
+    # CSGPU
+    ds_root = Path("/home/userfs/f/fgch500/storage/shared/TAPVid360/data")
+    sam_checkpoint = Path("/shared/storage/cs/staffstore/fgch500/pretrained_models/segmentation") / "sam2" / "sam2_hiera_large.pt"
+    out_root = Path("/home/userfs/f/fgch500/storage/shared/WhatGoesAround")
+
+    # Local
+    # ds_root = Path("/media/finlay/BigDaddyDrive/Outputs/tracker/tapvid360")
+    # sam_checkpoint = Path("/home/finlay/Shared/pretrained_models/segmentation") / "sam2" / "sam2_hiera_large.pt"
+    # out_root = Path("/media/finlay/BigDaddyDrive/Outputs/tracker/WhatGoesAround")
+
+    # Viking
+    # unet_path = "/mnt/scratch/projects/cs-dclabs-2019/WhatGoesAround/pretrained_models/argus/checkpoints"
+    # out_root = Path("/mnt/scratch/projects/cs-dclabs-2019/WhatGoesAround")
+    # sam_checkpoint = Path(
+    #     "/home/userfs/f/fgch500/storage/pretrained_models/segmentation") / "sam2" / "sam2_hiera_large.pt"
 
     # ds_root = Path("/media/finlay/BigDaddyDrive/Datasets/tracking/object-tracking/LaSOT/custom_out_of_frame_clips")
-    # poses_root = Path("/media/finlay/BigDaddyDrive/Outputs/tracker/whatGoesAround/estimated_poses")
-    # unet_path = "/home/userfs/f/fgch500/storage/pretrained_models/video_generation/argus"
-    # latents_root = Path("/media/finlay/BigDaddyDrive/Outputs/tracker/whatGoesAround/argus_feats")
-    # sam_checkpoint = Path("/home/finlay/Shared/pretrained_models/segmentation") / "sam2" / "sam2_hiera_large.pt"
 
-    poses_root = Path("/mnt/scratch/projects/cs-dclabs-2019/WhatGoesAround/estimated_poses")
-    unet_path = "/mnt/scratch/projects/cs-dclabs-2019/WhatGoesAround/pretrained_models/argus/checkpoints"
-    latents_root = Path("/mnt/scratch/projects/cs-dclabs-2019/WhatGoesAround/argus_feats")
-    sam_checkpoint = Path(
-        "/home/userfs/f/fgch500/storage/pretrained_models/segmentation") / "sam2" / "sam2_hiera_large.pt"
     force_get_latents = False
     eq_height = 512  # TODO watchout this is currently hardcoded
     weight_dtype = torch.float32
-    decode_chunk_size = 5  # Should be able to be bigger for larger gpu's
+    decode_chunk_size = 10  # Should be able to be bigger for larger gpu's
+    offload_to_cpu = True
 
 
 def _decode_pred_eq_frames(argus_latents, settings, vae):
@@ -108,14 +140,6 @@ def _get_poses(data, poses_dir):
 
 def _get_latents(condition_video_persp, conditional_video_equi, mask, accelerator, settings, latents_dir):
     if not latents_dir.exists() or settings.force_get_latents:
-        # normed_vid = (data.video.float() * 2) - 1
-        # conditional_video_pers = copy.deepcopy(conditional_video)
-        # TODO this could be in the argus pipeline
-        # conditional_video_equi, mask = pers2equi_batch(normed_vid[0].to(torch.float32), fov_x=fov_x,
-        #                                                roll=rolls, pitch=pitches, yaw=yaws,
-        #                                                width=settings.eq_height * 2, height=settings.eq_height,
-        #                                                device=accelerator.device,
-        #                                                return_mask=True)  # (T, C, H, W)
         conditional_video_equi = conditional_video_equi.to(settings.weight_dtype)
 
         latents_model = get_360_latents_model(settings.unet_path, accelerator, len(conditional_video_equi),
@@ -123,7 +147,7 @@ def _get_latents(condition_video_persp, conditional_video_equi, mask, accelerato
         if len(condition_video_persp) > latents_model.argus_config.num_frames:
             print("WARNING: video longer than max frames for argus latents model, updating max frames")
             latents_model.argus_config.num_frames = len(condition_video_persp)
-        argus_latents, _ = latents_model.forward_argus(condition_video_persp, conditional_video_equi, mask)
+        argus_latents, _ = latents_model.forward_argus(condition_video_persp, conditional_video_equi, mask, return_unet_latents=False)
         argus_latents = argus_latents[0]
         latents_dir.parent.mkdir(exist_ok=True, parents=True)
         torch.save({"latents": argus_latents.cpu()}, latents_dir)
@@ -146,6 +170,10 @@ def main(device, settings):
     if settings.ds_name == "tapvid360-10k":
         out_root = out_root / f"gt_poses-{USE_GT_POSES}"
     out_root.mkdir(exist_ok=True, parents=True)
+    results_dir = out_root / "results"
+    results_dir.mkdir(exist_ok=True)
+    metrics_dir = out_root / "metrics"
+    metrics_dir.mkdir(exist_ok=True)
     args = _get_args()
     if args.split_file is not None:
         with open(args.split_file, "r") as f:
@@ -153,40 +181,24 @@ def main(device, settings):
     dataset, dl = get_dataset(settings.ds_root, settings.ds_name, settings.specific_video_names)
 
     accelerator = Accelerator(mixed_precision='no')
-    if not (JUST_GET_LATENTS or JUST_GET_PRED_EQ_FRAMES):
+    if not JUST_GET_LATENTS:
         vae, sam_pred_video, sam_pred_image, cotracker = get_models(settings.sam_checkpoint, accelerator,
                                                                     accelerator.device, debug_skip_vae=False)
+        vae = vae.eval()
         sam_runner = SAMRunner(sam_img_pred=sam_pred_image, sam_video_pred=sam_pred_video)
     for data in tqdm(dl):
-        vid_out_dir = out_root / data.seq_name[0]
-        vid_out_dir.mkdir(exist_ok=True, parents=True)
+        if SKIP_IF_EXISTS and (results_dir / f"{data.seq_name[0].replace('/', '-')}.pth").exists():
+            print(f"Skipping {data.seq_name[0]} as results already exist")
+            continue
         data.video = data.video.to(accelerator.device, non_blocking=True)
         normed_vid = (data.video.float() * 2) - 1
-        if USE_GT_POSES:
-            assert settings.ds_name == "tapvid360-10k", "GT poses only supported for tapvid360 for now"
-            settings.eq_height = data.equirectangular_height[0]
-            fov_x = data.fov_x[0]
-            mapper = Mappers(data.video.shape[-1], data.video.shape[-2], settings.eq_height, fov_x=fov_x)
-            conditional_video_equi, mask = mapper.image.perspective_image_to_equirectangular(
-                data.video[0].permute(0, 2, 3, 1).cpu(), data.rotations[0], to_uint=False)
-            conditional_video_equi = conditional_video_equi.clip(0, 1)
-            conditional_video_equi = conditional_video_equi * 2 - 1
-            conditional_video_equi = conditional_video_equi.permute(0, 3, 1, 2)
-            mask = mask.unsqueeze(1)
-            # Argus needs of shape 512, 1024
-            conditional_video_equi = torch.nn.functional.interpolate(conditional_video_equi, size=(512, 1024),
-                                                                     mode='bilinear', align_corners=False)
-            mask = torch.nn.functional.interpolate(mask.float(), size=(512, 1024), mode='nearest').bool()
-        else:
-            # gt_roll, gt_pitch, gt_yaw = rot_to_euler_xyz(data.rotations[0], degrees=True)
-            fov_x, pitches, rolls, yaws = _get_poses(data, settings.poses_root / settings.ds_name)
-            conditional_video_equi, mask = pers2equi_batch(normed_vid[0].to(torch.float32), fov_x=fov_x,
-                                                           roll=rolls, pitch=pitches, yaw=yaws,
-                                                           width=settings.eq_height * 2, height=settings.eq_height,
-                                                           device=accelerator.device,
-                                                           return_mask=True)  # (T, C, H, W)
-        latents_dir = settings.latents_root / settings.ds_name / data.seq_name[
+        R_w2c, conditional_video_equi, fov_x, mask = get_poses_and_equirectangular_inputs(accelerator, data, normed_vid,
+                                                                                          settings)
+        latents_dir = settings.out_root / "argus_feats" / settings.ds_name / data.seq_name[
             0] / f"gt_poses-{USE_GT_POSES}" / f"fov_x-{fov_x:.2f}" / "latents.pth"
+        if ONLY_IF_LATENTS_EXIST and not (latents_dir.exists()):
+            print(f"Skipping {data.seq_name[0]} as latents dont exist")
+            continue
         argus_latents = _get_latents(normed_vid[0].clone(), conditional_video_equi, mask, accelerator, settings,
                                      latents_dir)
         if JUST_GET_LATENTS:
@@ -194,16 +206,13 @@ def main(device, settings):
         # TODO the larger i make this the better quality image that gets produced but obviously slower
         # settings.eq_height = 512 #2048
         mapper = Mappers(data.video.shape[-1], data.video.shape[-2], settings.eq_height, fov_x=fov_x)
-        orig_pred_eq_frames_torch = _decode_pred_eq_frames(argus_latents, settings, vae)
+        with torch.no_grad():
+            orig_pred_eq_frames_torch = _decode_pred_eq_frames(argus_latents, settings, vae)
         orig_pred_eq_frames_torch = _resize_eq_frames(orig_pred_eq_frames_torch,
                                                       new_shape=(settings.eq_height, settings.eq_height * 2))
 
-        # PUT ORIG PERSP BACK IN THE IMAGE
-        if USE_GT_POSES:
-            R_w2c = data.rotations[0]
-        else:
-            R_w2c = rot(alpha=torch.from_numpy(rolls), beta=torch.from_numpy(pitches), gamma=torch.from_numpy(yaws),
-                        degrees=True)
+        vid_out_dir = out_root / "debugs" / data.seq_name[0]
+        vid_out_dir.mkdir(exist_ok=True, parents=True)
         pred_eq_frames_torch = overlay_orig_persp_on_pred_eq(data, mapper, orig_pred_eq_frames_torch, R_w2c)
         pred_eq_frames_out_dir = vid_out_dir / "pred_eq_frames"
         pred_eq_frames_out_dir.mkdir(exist_ok=True)
@@ -211,12 +220,26 @@ def main(device, settings):
             Image.fromarray(pred_eq_frame_torch.cpu().numpy().astype(np.uint8)).save(
                 pred_eq_frames_out_dir / f"{i}.jpg")
 
+        if settings.offload_to_cpu:
+            orig_pred_eq_frames_torch = orig_pred_eq_frames_torch.cpu()
+
         if JUST_GET_PRED_EQ_FRAMES:
+            del normed_vid
+            del conditional_video_equi
+            del mask
+            del argus_latents
+            del mapper
+            del orig_pred_eq_frames_torch
+            del pred_eq_frames_torch
+            del data
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             continue
 
-        first_mask = get_inital_frame_mask(data, dataset, sam_runner)
-        first_mask_eq = project_perspective_mask_to_equirectangular_mask(first_mask, mapper, pitches, rolls, settings,
-                                                                         yaws)
+        first_mask = get_inital_frame_mask(data, dataset, sam_runner, mapper)
+        first_mask_eq_torch_, _ = mapper.image.perspective_image_to_equirectangular(
+            torch.from_numpy(first_mask[None, ..., None]), R_w2c[0], interp_mode="nearest")
+        first_mask_eq = first_mask_eq_torch_[0, ..., 0].to(bool)
         vid_seg_logits, vid_seg_confs = sam_runner.run_through_video(pred_eq_frames_torch,
                                                                      masks=first_mask_eq[None][None])
         vid_seg_mean_above_conf = vid_seg_confs > 0.1
@@ -231,72 +254,110 @@ def main(device, settings):
                                                      vid_seg_mean_above_conf[0, i].cpu().numpy())
             debug_seg_masks.append(debug_seg_mask)
 
-        obj_cnt_persp_imgs, obj_cnt_rot_matrices = get_object_centred_persp_imgs(pred_eq_frames_torch,
-                                                                                 vid_seg_mean_above_conf,
-                                                                                 mapper, batchsize=1)
-        print("")
-
         # So now if its a bbox dataset we can run something like sam2 to get the bbox or if its point tracks now run cotracker
-        # TODO should put this through the sam2 again on the object centred images to get better masks but skip for now
-        # TODO can we use original perspective image for frame 0, or can we use this to correct drift in roll pitch yaw anyway?
+        if isinstance(dataset, TAPVid360Dataset):
+            obj_cnt_persp_imgs, obj_cnt_rot_matrices = get_object_centred_persp_imgs(pred_eq_frames_torch,
+                                                                                     vid_seg_mean_above_conf,
+                                                                                     mapper, batchsize=1)
+            query_frame_points = mapper.point.vc.to_ij(data.trajectory)[0, 0]
+            cotracker.model = cotracker.model.to(device)
+            pred_tracks, pred_vis = run_through_cotracker(cotracker, 1, device,
+                                                          obj_cnt_persp_imgs, query_frame_points)
+            pred_unit_vectors = mapper.point.ij.to_vc(pred_tracks)
+            gt_unit_vectors = data.trajectory
+            metrics = compute_metrics(pred_unit_vectors[0], gt_unit_vectors[0], data.visibility[0])
+            for b, seq_name in enumerate(data.seq_name):
+                save_seq_name = seq_name.replace("/", "-")  # avoid creating subfolders
+                torch.save(pred_unit_vectors[b].cpu(), results_dir / f"{save_seq_name}.pth")
+                with open(metrics_dir / f"{save_seq_name}_metrics.json", 'w') as f:
+                    json.dump({m: metrics[m].mean().item() for m in metrics}, f, indent=4)
+            if settings.offload_to_cpu:
+                cotracker.model = cotracker.model.to(torch.device("cpu"))
+        else:
+            # TODO should put this through the sam2 again on the object centred images to get better masks but skip for now
+            # TODO can we use original perspective image for frame 0, or can we use this to correct drift in roll pitch yaw anyway?
+            pred_bboxes = []
+            debug_out_persp_imgs = []
+            for i, pred_mask in enumerate(vid_seg_mean_above_conf[0]):
+                pred_eq_pnts = torch.vstack(torch.where(pred_mask)).permute(1, 0)
+                rot_mat = R_w2c[i]
+                pred_persp_points = mapper.point.cr.to_ij(pred_eq_pnts.flip(-1), rot_mat.to(pred_eq_pnts.device))
+                pred_bbox = get_bbox_xyxy_from_points(pred_persp_points)
+                pred_bboxes.append(pred_bbox)
+                debug_vis_img = (data.video[0, i].permute(1, 2, 0).cpu().numpy() * 255).astype(np.uint8).copy()
+                for pnt in pred_persp_points:
+                    cv2.circle(debug_vis_img, (int(pnt[0].item()), int(pnt[1].item())), 3, (0, 0, 255), -1)
+                debug_out_persp_imgs.append(debug_vis_img)
 
-        pred_bboxes = []
-        debug_out_persp_imgs = []
-        for i, pred_mask in enumerate(vid_seg_mean_above_conf[0]):
-            pred_eq_pnts = torch.vstack(torch.where(pred_mask)).permute(1, 0)
-            rot_mat = rot(torch.Tensor([rolls[i]]), torch.Tensor([pitches[i]]), torch.Tensor([yaws[i]]), degrees=True)
-            pred_persp_points = mapper.point.cr.to_ij(pred_eq_pnts.flip(-1), rot_mat.to(pred_eq_pnts.device))
-            pred_bbox = get_bbox_xyxy_from_points(pred_persp_points)
-            pred_bboxes.append(pred_bbox)
-            # debug_vis_img = (data.video[0, i].permute(1, 2, 0).cpu().numpy() * 255).astype(np.uint8).copy()
-            # for pnt in pred_persp_points:
-            #     cv2.circle(debug_vis_img, (int(pnt[0].item()), int(pnt[1].item())), 3, (0, 0, 255), -1)
-            # debug_out_persp_imgs.append(debug_vis_img)
+            pred_bboxes = torch.stack(pred_bboxes).cpu()
+            pred_bboxes_clipped = pred_bboxes.clone()
+            pred_bboxes_clipped[:, 0::2] = pred_bboxes_clipped[:, 0::2].clamp(0, data.video.shape[-1] - 1)
+            pred_bboxes_clipped[:, 1::2] = pred_bboxes_clipped[:, 1::2].clamp(0, data.video.shape[-2] - 1)
 
-        pred_bboxes = torch.stack(pred_bboxes).cpu()
-        pred_bboxes_clipped = pred_bboxes.clone()
-        pred_bboxes_clipped[:, 0::2] = pred_bboxes_clipped[:, 0::2].clamp(0, data.video.shape[-1] - 1)
-        pred_bboxes_clipped[:, 1::2] = pred_bboxes_clipped[:, 1::2].clamp(0, data.video.shape[-2] - 1)
+            # TODO need to do metrics and visualisation for tapvid360
 
-        gt_bboxes = data.bboxes_xyxy[0]
+            gt_bboxes = data.bboxes_xyxy[0]
 
-        iou_scores = bbox_iou(gt_bboxes, pred_bboxes_clipped).diag()
-        vis_iou_scores = iou_scores[data.visibility[0].to(iou_scores.device).bool()]
+            iou_scores = bbox_iou(gt_bboxes, pred_bboxes_clipped).diag()
+            vis_iou_scores = iou_scores[data.visibility[0].to(iou_scores.device).bool()]
 
-        # TODO NOW MAKE USEFUL VIS
-        gt_persp_frames = (data.video[0].permute(0, 2, 3, 1).cpu().numpy() * 255).astype(np.uint8)
-        gt_vis_bboxes = gt_bboxes.cpu().numpy().astype(int)
-        pred_vis_bboxes = pred_bboxes_clipped.cpu().numpy().astype(int)
-        for f_idx, frame in enumerate(gt_persp_frames):
-            vis_frame = frame.copy()
-            cv2.rectangle(vis_frame, gt_vis_bboxes[f_idx][:2], gt_vis_bboxes[f_idx][2:], (0, 255, 0), 2)
-            cv2.rectangle(vis_frame, pred_vis_bboxes[f_idx][:2], pred_vis_bboxes[f_idx][2:], (255, 0, 0), 2)
-            print("")
+            # TODO NOW MAKE USEFUL VIS
+            gt_persp_frames = (data.video[0].permute(0, 2, 3, 1).cpu().numpy() * 255).astype(np.uint8)
+            gt_vis_bboxes = gt_bboxes.cpu().numpy().astype(int)
+            pred_vis_bboxes = pred_bboxes_clipped.cpu().numpy().astype(int)
+            for f_idx, frame in enumerate(gt_persp_frames):
+                vis_frame = frame.copy()
+                cv2.rectangle(vis_frame, gt_vis_bboxes[f_idx][:2], gt_vis_bboxes[f_idx][2:], (0, 255, 0), 2)
+                cv2.rectangle(vis_frame, pred_vis_bboxes[f_idx][:2], pred_vis_bboxes[f_idx][2:], (255, 0, 0), 2)
+                print("")
+
+        if settings.offload_to_cpu:
+            del pred_eq_frames_torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
 
-def project_perspective_mask_to_equirectangular_mask(first_mask, mapper, pitches, rolls, settings, yaws):
-    first_rot_mat = rot(torch.Tensor([rolls[0]]), torch.Tensor([pitches[0]]), torch.Tensor([yaws[0]]), degrees=True)
-    first_mask_eq_pnts = mapper.point.ij.to_cr(torch.from_numpy(np.column_stack(np.where(first_mask))).flip(-1),
-                                               first_rot_mat)
-    first_mask_eq = torch.zeros(settings.eq_height, settings.eq_height * 2, dtype=torch.bool)
-    indices = first_mask_eq_pnts.long()
-    indices_x, indices_y = indices[:, 0], indices[:, 1]
-    valid_mask = (indices_x >= 0) & (indices_x < settings.eq_height * 2) & \
-                 (indices_y >= 0) & (indices_y < settings.eq_height)
-    indices_x_valid = indices_x[valid_mask]
-    indices_y_valid = indices_y[valid_mask]
-    # IMPORTANT: Tensor indexing is [row, col], so you use [indices_y, indices_x]
-    first_mask_eq[indices_y_valid, indices_x_valid] = True
-    return first_mask_eq
+def get_poses_and_equirectangular_inputs(accelerator, data, normed_vid, settings):
+    if USE_GT_POSES:
+        assert settings.ds_name == "tapvid360-10k", "GT poses only supported for tapvid360 for now"
+        settings.eq_height = data.equirectangular_height[0]
+        fov_x = data.fov_x[0]
+        mapper = Mappers(data.video.shape[-1], data.video.shape[-2], settings.eq_height, fov_x=fov_x)
+        conditional_video_equi, mask = mapper.image.perspective_image_to_equirectangular(
+            data.video[0].permute(0, 2, 3, 1).cpu(), data.rotations[0], to_uint=False)
+        conditional_video_equi = conditional_video_equi.clip(0, 1)
+        conditional_video_equi = conditional_video_equi * 2 - 1
+        conditional_video_equi = conditional_video_equi.permute(0, 3, 1, 2)
+        mask = mask.unsqueeze(1)
+        # Argus needs of shape 512, 1024
+        conditional_video_equi = torch.nn.functional.interpolate(conditional_video_equi, size=(512, 1024),
+                                                                 mode='bilinear', align_corners=False)
+        mask = torch.nn.functional.interpolate(mask.float(), size=(512, 1024), mode='nearest').bool()
+        R_w2c = data.rotations[0]
+    else:
+        # gt_roll, gt_pitch, gt_yaw = rot_to_euler_xyz(data.rotations[0], degrees=True)
+        fov_x, pitches, rolls, yaws = _get_poses(data, settings.poses_root / "estimated_poses" / settings.ds_name)
+        conditional_video_equi, mask = pers2equi_batch(normed_vid[0].to(torch.float32), fov_x=fov_x,
+                                                       roll=rolls, pitch=pitches, yaw=yaws,
+                                                       width=settings.eq_height * 2, height=settings.eq_height,
+                                                       device=accelerator.device,
+                                                       return_mask=True)  # (T, C, H, W)
+        R_w2c = rot(alpha=torch.from_numpy(rolls), beta=torch.from_numpy(pitches), gamma=torch.from_numpy(yaws),
+                    degrees=True)
+    return R_w2c, conditional_video_equi, fov_x, mask
 
 
-def get_inital_frame_mask(data, dataset, sam_runner):
+def get_inital_frame_mask(data, dataset, sam_runner, mapper, every_x_points=10):
     if isinstance(dataset, LaSOTDataset):
         pos_points, neg_points = None, None
         bbox_xyxy = data.bboxes_xyxy[:, 0].cpu().tolist()
     else:
         bbox_xyxy, neg_points = None, None
-        raise NotImplementedError("FIGURE HOW TO GET THE POINTS FOR TAPVID360 DATASET")
+        pos_points = mapper.point.vc.to_ij(data.trajectory)[0, 0].cpu().numpy().astype(int).tolist()
+        pos_points = pos_points[::every_x_points]
+        debug_vis = (data.video[0, 0].permute(1, 2, 0).cpu().numpy() * 255).astype(np.uint8).copy()
+        for pnt in pos_points:
+            cv2.circle(debug_vis, (pnt[0], pnt[1]), 3, (0, 0, 255), -1)
     first_mask = sam_runner.run_through_image(
         (data.video[0, 0].permute(1, 2, 0).cpu().numpy() * 255).astype(np.uint8),
         bbox_xyxy=bbox_xyxy, positive_points=pos_points, negative_points=neg_points)

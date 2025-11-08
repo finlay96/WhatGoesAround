@@ -52,7 +52,7 @@ class ArgusCoTracker(torch.nn.Module):
         mimsave(out_path / "combined.mp4", concatenated_video, fps=fps)
 
     @torch.no_grad()
-    def forward_argus(self, input_video, eq_video, eq_mask, noise_conditioning=False):
+    def forward_argus(self, input_video, eq_video, eq_mask, noise_conditioning=False, return_unet_latents=True):
         conditional_video_pers = copy.deepcopy(input_video)
         if eq_video is not None:
             conditional_video_equi = eq_video.to(self.weight_dtype)
@@ -97,6 +97,10 @@ class ArgusCoTracker(torch.nn.Module):
                                conditional_video_equi[
                                    :, num_frames_processed + blend_frames: num_frames_processed + num_frames_to_process]],
                               dim=1)
+                if round > 0:
+                    generated_frames_this = generated_frames_this.cpu()
+                    del generated_frames_this
+
                 mask_this = mask[:, num_frames_processed: num_frames_processed + num_frames_to_process]
                 conditional_video_pers_this = conditional_video_pers[
                     :, num_frames_processed: num_frames_processed + num_frames_to_process]
@@ -106,6 +110,7 @@ class ArgusCoTracker(torch.nn.Module):
                 fps = 3.0  # TODO hardcoded for now
 
                 # TODO need to get the unet outputs - now we also need to get the eq frames stuff in there from the other bit too
+
                 generated_latents_this, extracted_latents_this = self.argus_pipeline(
                     conditional_video_input,  # (1, T, C, H, W)
                     conditional_images=conditional_video_pers_this,  # (1, T, C, H, W)
@@ -125,17 +130,13 @@ class ArgusCoTracker(torch.nn.Module):
                     extended_decoding=self.argus_config.extended_decoding,
                     rotation_during_inference=self.argus_config.rotation_during_inference,
                     return_latents=True,
+                    get_final_unet_latents=return_unet_latents
                 )  # [B, T, C, H, W]
                 if blend_frames != 0:  # save current generation results into a file
                     generated_frames_this = self.argus_pipeline.decode_latents(generated_latents_this, num_frames_to_process,
                                                                     decode_chunk_size=self.argus_config.decode_chunk_size,
                                                                     extended_decoding=self.argus_config.extended_decoding,
                                                                     blend_decoding_ratio=self.argus_config.blend_decoding_ratio)
-                #     generated_frames_this_save = ((generated_frames_this.clamp(-1, 1) + 1) * 127.5).cpu().to(
-                #         torch.float32).numpy().astype(np.uint8)
-                #     generated_frames_this_save = generated_frames_this_save[0].transpose(1, 2, 3, 0)  # (T, H, W, C)
-                #     save_path = out_file_path.replace(ext, f"_output_fov{fov_x:.0f}_hw{hw_ratio:.2f}_round{round}.mp4")
-                #     mimsave(save_path, generated_frames_this_save, fps=fps)
                 if generated_latents is None:
                     generated_latents = generated_latents_this
                     all_extracted_latents = extracted_latents_this
@@ -148,13 +149,14 @@ class ArgusCoTracker(torch.nn.Module):
                                                        :, :blend_frames],
                                                    generated_latents_this[:, blend_frames:]], dim=1)
                     # TODO doesnt work for greater than 1 batchsize and untested currently
-                    for k1 in all_extracted_latents.keys():
-                        for k2 in all_extracted_latents[k1].keys():
-                            all_extracted_latents[k1][k2] = torch.cat(
-                                [all_extracted_latents[k1][k2][:-blend_frames],
-                                 blend_weight[0] * all_extracted_latents[k1][k2][-blend_frames:] + (
-                                         1 - blend_weight[0]) * extracted_latents_this[k1][k2][:blend_frames],
-                                 extracted_latents_this[k1][k2][blend_frames:]], dim=0)
+                    if extracted_latents_this is not None:
+                        for k1 in all_extracted_latents.keys():
+                            for k2 in all_extracted_latents[k1].keys():
+                                all_extracted_latents[k1][k2] = torch.cat(
+                                    [all_extracted_latents[k1][k2][:-blend_frames],
+                                     blend_weight[0] * all_extracted_latents[k1][k2][-blend_frames:] + (
+                                             1 - blend_weight[0]) * extracted_latents_this[k1][k2][:blend_frames],
+                                     extracted_latents_this[k1][k2][blend_frames:]], dim=0)
 
                 if num_frames_remaining == num_frames_to_process:
                     break
@@ -162,5 +164,7 @@ class ArgusCoTracker(torch.nn.Module):
                 num_frames_remaining -= (num_frames_to_process - blend_frames)
                 num_frames_processed += (num_frames_to_process - blend_frames)
                 round += 1
+                del generated_latents_this, extracted_latents_this
+                torch.cuda.empty_cache()
 
         return generated_latents, all_extracted_latents

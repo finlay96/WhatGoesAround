@@ -332,6 +332,7 @@ class StableVideoDiffusionPipelineCustom(DiffusionPipeline):
             rotation_during_inference: bool = False,
             return_noise: bool = False,
             return_latents: bool = False,
+            get_final_unet_latents: bool = False,
     ):
         r"""
         The call function to the pipeline for generation.
@@ -512,7 +513,8 @@ class StableVideoDiffusionPipelineCustom(DiffusionPipeline):
             hook_handles['up'][i] = self.unet.up_blocks[i].register_forward_hook(
                 extractors['up'][i]
             )
-        final_latents = {'down': {}, 'up': {}}
+        # final_latents = {'down': {}, 'up': {}}
+        final_latents = None
 
         total_rotation = 0.
 
@@ -555,7 +557,7 @@ class StableVideoDiffusionPipelineCustom(DiffusionPipeline):
                 # compute the previous noisy sample x_t -> x_t-1
                 latents = self.scheduler.step(noise_pred, t, latents).prev_sample
 
-                if callback_on_step_end is not None:
+                if callback_on_step_end is not None and get_final_unet_latents:
                     callback_kwargs = {}
                     for k in callback_on_step_end_tensor_inputs:
                         callback_kwargs[k] = locals()[k]
@@ -584,23 +586,24 @@ class StableVideoDiffusionPipelineCustom(DiffusionPipeline):
         latents = torch.roll(latents, shifts=int((latents.shape[-1] * rotation_angle_left) // 360), dims=-1)
 
         # This dictionary will hold the final results.
-        final_latents = {'down': {}, 'up': {}}
+        if get_final_unet_latents:
+            final_latents = {'down': {}, 'up': {}}
 
-        for i in range(num_blocks):
-            # Handle the classifier-free guidance split
-            if self.do_classifier_free_guidance:
-                _, cond_down = extractors['down'][i].latents.chunk(2)
-                _, cond_up = extractors['up'][i].latents.chunk(2)
-                final_latents['down'][i] = cond_down
-                final_latents['up'][i] = cond_up
-            else:
-                final_latents['down'][i] = extractors['down'][i].latents
-                final_latents['up'][i] = extractors['up'][i].latents
+            for i in range(num_blocks):
+                # Handle the classifier-free guidance split
+                if self.do_classifier_free_guidance:
+                    _, cond_down = extractors['down'][i].latents.chunk(2)
+                    _, cond_up = extractors['up'][i].latents.chunk(2)
+                    final_latents['down'][i] = cond_down
+                    final_latents['up'][i] = cond_up
+                else:
+                    final_latents['down'][i] = extractors['down'][i].latents
+                    final_latents['up'][i] = extractors['up'][i].latents
 
-        # --- IMPORTANT: Clean up ALL hooks ---
-        for i in range(num_blocks):
-            hook_handles['down'][i].remove()
-            hook_handles['up'][i].remove()
+            # --- IMPORTANT: Clean up ALL hooks ---
+            for i in range(num_blocks):
+                hook_handles['down'][i].remove()
+                hook_handles['up'][i].remove()
 
         # hook_handle.remove()
 

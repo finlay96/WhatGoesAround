@@ -136,7 +136,7 @@ class SAMRunner:
 
 def get_360_latents_model(unet_path, accelerator, num_frames, device, weight_dtype=torch.float32):
     args = SVDArguments(unet_path=unet_path, num_inference_steps=50)
-    args.blend_frames = 5
+    args.blend_frames = 10 #5
     args.num_frames_batch = 25
     args.num_frames = num_frames
 

@@ -15,7 +15,7 @@ def get_dataset(ds_root, ds_name, specific_video_names=None):
     assert ds_root.exists()
     if ds_name == "tapvid360-10k":
         if specific_video_names is None:
-            with open(Path(__file__).parent.parent / "data/mini_dataset_names_100_items.txt", "r") as f:
+            with open(Path(__file__).parent.parent / "data/tapvid10k_wga_dataset.txt", "r") as f:
                 video_names = [line.strip() for line in f.readlines()]
         else:
             video_names = specific_video_names

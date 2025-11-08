@@ -62,12 +62,12 @@ class MappersImage:
 
         return perspective_images
 
-    def perspective_image_to_equirectangular(self, perspective_images, R_w2c, to_uint=True):
+    def perspective_image_to_equirectangular(self, perspective_images, R_w2c, to_uint=True, interp_mode='bicubic'):
         """
         Projects perspective images back into the equirectangular image space using inverse rotation.
 
         Args:
-            perspective_images (torch.Tensor): (B, H_p, W_p, 3)
+            perspective_images (torch.Tensor): (B, H_p, W_p, 1|3)
             R_w2c (torch.Tensor): (B, 3, 3)
             to_uint (bool): Whether to return result as uint8
 
@@ -92,7 +92,7 @@ class MappersImage:
         eq_recon = torch.nn.functional.grid_sample(
             perspective_images.float(),
             grid,
-            mode='bicubic',
+            interp_mode,
             padding_mode='zeros',
             align_corners=True
         )  # (B, 3, H_eq, W_eq)
@@ -105,10 +105,16 @@ class MappersImage:
         valid_j = (ij[..., 1] >= 0) & (ij[..., 1] < H_p)
         valid_mask = (vc[..., 0] > 0) & valid_i & valid_j
 
-        if to_uint:
-            eq_recon = torch.clamp(eq_recon, 0, 255).to(torch.uint8)
+        # Create a zero tensor for the 'else' condition
+        zeros = torch.zeros_like(eq_recon)
 
-        return eq_recon * valid_mask[..., None], valid_mask
+        # Use torch.where to select from eq_recon if valid, otherwise select from zeros
+        output = torch.where(valid_mask[..., None], eq_recon, zeros)
+
+        if to_uint:
+            output = torch.clamp(output, 0, 255).to(torch.uint8)
+
+        return output, valid_mask
 
     def equirectangular_image_to_equirectangular_ego(
             self,
