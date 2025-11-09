@@ -134,10 +134,11 @@ class SAMRunner:
         return torch.stack(out_logits)[:, :, 0].transpose(1, 0), torch.stack(confidence_scores)[:, :, 0].transpose(1, 0)
 
 
-def get_360_latents_model(unet_path, accelerator, num_frames, device, weight_dtype=torch.float32):
+def get_360_latents_model(unet_path, accelerator, num_frames, device, weight_dtype=torch.float32, blend_frames=10,
+                          num_frames_batch=25):
     args = SVDArguments(unet_path=unet_path, num_inference_steps=50)
-    args.blend_frames = 10 #5
-    args.num_frames_batch = 25
+    args.blend_frames = blend_frames
+    args.num_frames_batch = num_frames_batch
     args.num_frames = num_frames
 
     argus_pipeline = get_models_custom(args, accelerator, weight_dtype)
