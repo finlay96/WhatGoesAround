@@ -144,9 +144,9 @@ def main(args, settings):
         eq_points_pred = mapper.point.ij.to_cr(pred_tracks, obj_cnt_rot_matrices)
         pred_unit_vectors = mapper.point.cr.to_vc(eq_points_pred[0].to(rots.device), rots)
         metrics = compute_metrics(pred_unit_vectors, data.trajectory[0], data.visibility[0])
-        results_dir = settings.out_root / "results"
+        results_dir = settings.paths.out_root / "results"
         results_dir.mkdir(exist_ok=True)
-        metrics_dir = settings.out_root / "metrics"
+        metrics_dir = settings.paths.out_root / "metrics"
         metrics_dir.mkdir(exist_ok=True)
         # for b, seq_name in enumerate(data.seq_name):
         save_seq_name = data.seq_name.replace("/", "-")  # avoid creating subfolders
