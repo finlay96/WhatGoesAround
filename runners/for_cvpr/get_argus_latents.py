@@ -1,3 +1,5 @@
+import json
+
 from accelerate import Accelerator
 from tqdm import tqdm
 
@@ -67,6 +69,9 @@ def get_latents(condition_video_persp, conditional_video_equi, mask, accelerator
 
 @torch.no_grad()
 def main(args, settings):
+    if args.split_file is not None:
+        with open(args.split_file, "r") as f:
+            settings.specific_video_names = json.load(f)
     dataset, dl = get_dataset(settings.paths.tapvid360_data_root, settings.ds_name, settings.specific_video_names)
     accelerator = Accelerator(mixed_precision='no')
     for data in tqdm(dl):

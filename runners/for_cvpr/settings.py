@@ -61,6 +61,12 @@ def get_args():
     parser = argparse.ArgumentParser(description="Runners for argus cotracker")
     parser.add_argument("-gt", "--use_gt_rot", action='store_true', help="Use ground truth rotation")
     parser.add_argument("-d", "--debugs", action='store_true', help="Output debugs")
+    parser.add_argument(
+        '--split_file',  # The name of the flag
+        type=str,  # The type of value to expect
+        default=None,  # The default value if the flag is not provided
+        help="Optional: Path to the input file."  # Help message
+    )
 
     return parser.parse_args()
 
