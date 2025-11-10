@@ -53,9 +53,17 @@ def main(args, settings):
     accelerator = Accelerator(mixed_precision='no')
     device = accelerator.device
     for data in tqdm(dl):
+        assert len(data.seq_name) == 1, "Batch size greater than 1 not supported"
         latents_dir = settings.paths.out_root / "argus_feats" / settings.ds_name / data.seq_name[
             0] / f"gt_poses-{args.use_gt_rot}"
         assert latents_dir.exists(), f"Latents dir {latents_dir} does not exist"
+        results_dir = settings.paths.out_root / "results" / f"gt_poses-{args.use_gt_rot}"
+        metrics_dir = settings.paths.out_root / "metrics" / f"gt_poses-{args.use_gt_rot}"
+        save_seq_name = data.seq_name[0].replace("/", "-")  # avoid creating subfolders
+        metrics_file_name = metrics_dir / f"{save_seq_name}_metrics.json"
+        if metrics_file_name.exists() and settings.skip_if_exists:
+            print(f"Skipping {data.seq_name[0]} as metrics already exist")
+            continue
         rotations_data = torch.load(latents_dir / "rotations.pth")
         fov_x = rotations_data["fov_x"]
         rots = rotations_data["rotations"].to(accelerator.device, non_blocking=True)
@@ -84,14 +92,6 @@ def main(args, settings):
                 Image.fromarray(pred_eq_frame_torch.cpu().numpy().astype(np.uint8)).save(
                     pred_eq_frames_out_dir / f"{i}.jpg")
 
-        # data.rotations = data.rotations.to(device)[None]
-        # first_mask = get_inital_frame_mask(data, dataset, sam_runner, mapper)
-        # bbox_xyxy, neg_points = None, None
-        # pos_points = mapper.point.vc.to_ij(trajectory)[0, 0].cpu().numpy().astype(int).tolist()
-        # pos_points = pos_points[::10]
-        # first_mask = sam_runner.run_through_image(
-        #     (video[0, 0].permute(1, 2, 0).cpu().numpy() * 255).astype(np.uint8),
-        #     bbox_xyxy=bbox_xyxy, positive_points=pos_points, negative_points=neg_points)
         first_mask, pos_points = get_inital_frame_mask(data, dataset, sam_runner, mapper, every_x_points=5)
 
         if args.debugs:
@@ -144,17 +144,13 @@ def main(args, settings):
         eq_points_pred = mapper.point.ij.to_cr(pred_tracks, obj_cnt_rot_matrices)
         pred_unit_vectors = mapper.point.cr.to_vc(eq_points_pred[0].to(rots.device), rots)
         metrics = compute_metrics(pred_unit_vectors, data.trajectory[0], data.visibility[0])
-        results_dir = settings.paths.out_root / "results"
         results_dir.mkdir(exist_ok=True)
-        metrics_dir = settings.paths.out_root / "metrics"
         metrics_dir.mkdir(exist_ok=True)
-        for b, seq_name in enumerate(data.seq_name):
-            save_seq_name = seq_name.replace("/", "-")  # avoid creating subfolders
-            torch.save(pred_unit_vectors.cpu(), results_dir / f"{save_seq_name}.pth")
-            with open(metrics_dir / f"{save_seq_name}_metrics.json", 'w') as f:
-                json.dump({m: metrics[m].mean().item() for m in metrics}, f, indent=4)
-            for m in metrics:
-                print(f"{m}: {metrics[m].mean().item()}")
+        torch.save(pred_unit_vectors.cpu(), results_dir / f"{save_seq_name}.pth")
+        with open(metrics_file_name, 'w') as f:
+            json.dump({m: metrics[m].mean().item() for m in metrics}, f, indent=4)
+        for m in metrics:
+            print(f"{m}: {metrics[m].mean().item()}")
 
 
 if __name__ == "__main__":

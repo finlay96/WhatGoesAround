@@ -55,6 +55,7 @@ class Settings:
     weight_dtype = torch.float32
     decode_chunk_size = 10  # Should be able to be bigger for larger gpu's
     offload_to_cpu = True
+    skip_if_exists = True
 
 
 def get_args():

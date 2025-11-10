@@ -75,14 +75,17 @@ def main(args, settings):
     dataset, dl = get_dataset(settings.paths.tapvid360_data_root, settings.ds_name, settings.specific_video_names)
     accelerator = Accelerator(mixed_precision='no')
     for data in tqdm(dl):
+        out_dir = settings.paths.out_root / "argus_feats" / settings.ds_name / data.seq_name[
+            0] / f"gt_poses-{args.use_gt_rot}"
+        if out_dir.exists() and settings.skip_if_exists:
+            print(f"Skipping {data.seq_name[0]} as latents already exist")
+            continue
         data.video = data.video.to(accelerator.device, non_blocking=True)
         data.rotations = data.rotations.to(accelerator.device, non_blocking=True)
         normed_vid = (data.video.float() * 2) - 1
         R_w2c, fov_x = get_rotations(data, accelerator.device, use_gt=args.use_gt_rot)
         mapper = Mappers(data.video.shape[-1], data.video.shape[-2], settings.eq_height, fov_x=fov_x)
         input_eq_frames, input_masks = create_argus_inputs(data.video[0].permute(0, 2, 3, 1), R_w2c, mapper)
-        out_dir = settings.paths.out_root / "argus_feats" / settings.ds_name / data.seq_name[
-            0] / f"gt_poses-{args.use_gt_rot}"
         out_dir.mkdir(exist_ok=True, parents=True)
         get_latents(normed_vid[0].clone(), input_eq_frames, input_masks, accelerator, settings, out_dir / "latents.pth")
         torch.save({"rotations": R_w2c.cpu(), "fov_x": fov_x}, out_dir / "rotations.pth")
