@@ -144,8 +144,8 @@ def main(args, settings):
         eq_points_pred = mapper.point.ij.to_cr(pred_tracks, obj_cnt_rot_matrices)
         pred_unit_vectors = mapper.point.cr.to_vc(eq_points_pred[0].to(rots.device), rots)
         metrics = compute_metrics(pred_unit_vectors, data.trajectory[0], data.visibility[0])
-        results_dir.mkdir(exist_ok=True)
-        metrics_dir.mkdir(exist_ok=True)
+        results_dir.mkdir(exist_ok=True, parents=True)
+        metrics_dir.mkdir(exist_ok=True, parents=True)
         torch.save(pred_unit_vectors.cpu(), results_dir / f"{save_seq_name}.pth")
         with open(metrics_file_name, 'w') as f:
             json.dump({m: metrics[m].mean().item() for m in metrics}, f, indent=4)
