@@ -83,7 +83,9 @@ def main(args, settings):
 
         pred_eq_frames_torch = overlay_orig_persp_on_pred_eq(data, mapper, orig_pred_eq_frames_torch, rots)
 
-        debug_vid_out_dir = settings.paths.out_root / "debugs"
+        debug_vid_out_dir = settings.paths.out_root / "debugs" / settings.ds_name / data.seq_name[0]
+        if settings.ds_name == "tapvid360-10k":
+            debug_vid_out_dir /= f"gt_poses-{args.use_gt_rot}"
         if args.debugs:
             debug_vid_out_dir.mkdir(exist_ok=True, parents=True)
             pred_eq_frames_out_dir = debug_vid_out_dir / "pred_eq_frames"
