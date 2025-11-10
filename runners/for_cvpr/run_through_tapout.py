@@ -57,8 +57,11 @@ def main(args, settings):
         latents_dir = settings.paths.out_root / "argus_feats" / settings.ds_name / data.seq_name[
             0] / f"gt_poses-{args.use_gt_rot}"
         assert latents_dir.exists(), f"Latents dir {latents_dir} does not exist"
-        results_dir = settings.paths.out_root / "results" / f"gt_poses-{args.use_gt_rot}"
-        metrics_dir = settings.paths.out_root / "metrics" / f"gt_poses-{args.use_gt_rot}"
+        results_dir = settings.paths.out_root / "results" / settings.ds_name
+        metrics_dir = settings.paths.out_root / "metrics" / settings.ds_name
+        if settings.ds_name == "tapvid360-10k":
+            results_dir /= f"gt_poses-{args.use_gt_rot}"
+            metrics_dir /= f"gt_poses-{args.use_gt_rot}"
         save_seq_name = data.seq_name[0].replace("/", "-")  # avoid creating subfolders
         metrics_file_name = metrics_dir / f"{save_seq_name}_metrics.json"
         if metrics_file_name.exists() and settings.skip_if_exists:
