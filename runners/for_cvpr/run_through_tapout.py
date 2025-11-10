@@ -92,7 +92,7 @@ def main(args, settings):
         # first_mask = sam_runner.run_through_image(
         #     (video[0, 0].permute(1, 2, 0).cpu().numpy() * 255).astype(np.uint8),
         #     bbox_xyxy=bbox_xyxy, positive_points=pos_points, negative_points=neg_points)
-        first_mask, pos_points = get_inital_frame_mask(data, dataset, sam_runner, mapper)
+        first_mask, pos_points = get_inital_frame_mask(data, dataset, sam_runner, mapper, every_x_points=5)
 
         if args.debugs:
             first_mask_pred_out_dir = debug_vid_out_dir / "first_mask_pred"
