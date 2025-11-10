@@ -79,6 +79,7 @@ def get_object_centred_persp_imgs(eq_vid_frames, vid_seg_masks, mapper, batchsiz
 
     return centred_persp_imgs, rot_matrices
 
+
 def get_object_centred_persp_imgs_with_interpolation(eq_vid_frames, vid_seg_masks, mapper, batchsize=16):
     num_masks, num_frames = vid_seg_masks.shape[:2]
     device = vid_seg_masks.device
@@ -156,12 +157,26 @@ def get_object_centred_persp_imgs_with_interpolation(eq_vid_frames, vid_seg_mask
     return centred_persp_imgs, rot_matrices
 
 
-def overlay_orig_persp_on_pred_eq(data, mapper, pred_eq_frames_torch, R_w2c):
+def overlay_orig_persp_on_pred_eq(data, mapper, pred_eq_frames_torch, R_w2c, with_erode=True):
     warped_gt_persp_batch, valid_mask_batch = mapper.image.perspective_image_to_equirectangular(
-        data.video[0].permute(0, 2, 3, 1) * 255,
+        data.video[0].permute(0, 2, 3, 1),
         R_w2c.to(data.video.device),
         to_uint=False
     )
-    valid_mask_broadcastable = valid_mask_batch.unsqueeze(-1).bool()
+    warped_gt_persp_batch = warped_gt_persp_batch.clip(0, 1)
+    warped_gt_persp_batch *= 255
 
-    return torch.where(valid_mask_broadcastable, warped_gt_persp_batch, pred_eq_frames_torch)
+    if with_erode:
+        mask_float_with_channel = valid_mask_batch.float().unsqueeze(1)
+        kernel_size = 3
+        eroded_mask_float = 1.0 - torch.nn.functional.max_pool2d(
+            1.0 - mask_float_with_channel,
+            kernel_size=kernel_size,
+            stride=1,
+            padding=(kernel_size - 1) // 2
+        ).squeeze(1)
+    else:
+        eroded_mask_float = valid_mask_batch
+    valid_mask_broadcastable = eroded_mask_float.unsqueeze(-1).bool()
+
+    return torch.where(valid_mask_broadcastable, warped_gt_persp_batch, pred_eq_frames_torch.float())
