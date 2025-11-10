@@ -18,8 +18,8 @@ def get_rotations(data, device, use_gt=False, offload_from_gpu=False):
         R_w2c = data.rotations[0]
     else:
         pose_runner = VGGTPoseRunner(device=device)
-        # TODO must decide if im using these pred fov_x values anywhere
-        pred_extrinsics, pred_fov_x = pose_runner.run(data.video[0].permute(0, 2, 3, 1))
+        # For our definition of predicted rotations we can use the original ground truth fov_x and starting rotation position
+        pred_extrinsics, _ = pose_runner.run(data.video[0].permute(0, 2, 3, 1))
         pred_rots = pose_runner.convert_to_tapvid360_format(pred_extrinsics[..., :3]).to(torch.float32)[0]
         R_w2c = pose_runner.align_to_ground_truth_start_rotations(pred_rots, data.rotations[0, 0])
         if offload_from_gpu:
