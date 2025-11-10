@@ -11,7 +11,7 @@ class VikingPaths:
     unet_path = "/mnt/scratch/projects/cs-dclabs-2019/WhatGoesAround/pretrained_models/argus/checkpoints"
     out_root = Path("/mnt/scratch/projects/cs-dclabs-2019/WhatGoesAround-FOR-CVPR")
     sam_checkpoint = Path(
-        "/home/userfs/f/fgch500/storage/pretrained_models/segmentation") / "sam2" / "sam2_hiera_large.pt"
+        "/mnt/scratch/projects/cs-dclabs-2019/WhatGoesAround/pretrained_models/segmentation") / "sam2" / "sam2_hiera_large.pt"
     tapvid360_data_root = Path("/mnt/scratch/projects/cs-dclabs-2019/tapvid360/outputs")
 
 
