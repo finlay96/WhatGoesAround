@@ -55,6 +55,7 @@ def main(args, settings):
     device = accelerator.device
     for data in tqdm(dl):
         assert len(data.seq_name) == 1, "Batch size greater than 1 not supported"
+        print("Running:", data.seq_name[0])
         latents_dir = settings.paths.out_root / "argus_feats" / settings.ds_name / data.seq_name[
             0] / f"gt_poses-{args.use_gt_rot}"
         assert latents_dir.exists(), f"Latents dir {latents_dir} does not exist"
@@ -86,7 +87,8 @@ def main(args, settings):
         orig_pred_eq_frames_torch = _resize_eq_frames(orig_pred_eq_frames_torch,
                                                       new_shape=(settings.gen_eq_height, settings.gen_eq_height * 2))
 
-        pred_eq_frames_torch = overlay_orig_persp_on_pred_eq(data, mapper, orig_pred_eq_frames_torch, rots)
+        pred_eq_frames_torch = overlay_orig_persp_on_pred_eq(data, mapper, orig_pred_eq_frames_torch, rots,
+                                                             with_erode=True).to(torch.uint8)
 
         debug_vid_out_dir = settings.paths.out_root / "debugs" / settings.ds_name / data.seq_name[0]
         if settings.ds_name == "tapvid360-10k":
@@ -165,12 +167,14 @@ def main(args, settings):
             final_pred_vs_gt_points_out_dir.mkdir(exist_ok=True)
             pred_points = mapper.point.vc.to_ij(pred_unit_vectors)
             gt_points = mapper.point.vc.to_ij(data.trajectory)
+            behind_camera = (data.trajectory[0, :, :, 0] < 0.1).any(1)
             for i, f in enumerate((data.video[0].permute(0, 2, 3, 1) * 255)):
                 debug_vis = (f.cpu().numpy()).astype(np.uint8).copy()
-                for pnt in pred_points[i]:
-                    cv2.circle(debug_vis, (int(pnt[0]), int(pnt[1])), 3, (0, 0, 255), -1)
-                for pnt in gt_points[0, i]:
-                    cv2.circle(debug_vis, (int(pnt[0]), int(pnt[1])), 3, (0, 255, 0), -1)
+                if not behind_camera[i]:
+                    for pnt in pred_points[i]:
+                        cv2.circle(debug_vis, (int(pnt[0]), int(pnt[1])), 3, (0, 0, 255), -1)
+                    for pnt in gt_points[0, i]:
+                        cv2.circle(debug_vis, (int(pnt[0]), int(pnt[1])), 3, (0, 255, 0), -1)
                 Image.fromarray(debug_vis).save(final_pred_vs_gt_points_out_dir / f"{i}.jpg")
 
         metrics = compute_metrics(pred_unit_vectors, data.trajectory[0], data.visibility[0])
