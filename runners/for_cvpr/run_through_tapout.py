@@ -49,7 +49,8 @@ def main(args, settings):
     if args.split_file is not None:
         with open(args.split_file, "r") as f:
             settings.specific_video_names = json.load(f)
-    dataset, dl = get_dataset(settings.paths.tapvid360_data_root, settings.ds_name, settings.specific_video_names)
+    ds_root = settings.paths.tapvid360_data_root if settings.ds_name == "tapvid360-10k" else settings.paths.lasot_data_root
+    dataset, dl = get_dataset(ds_root, settings.ds_name, settings.specific_video_names)
     accelerator = Accelerator(mixed_precision='no')
     device = accelerator.device
     for data in tqdm(dl):
@@ -71,7 +72,7 @@ def main(args, settings):
         fov_x = rotations_data["fov_x"]
         rots = rotations_data["rotations"].to(accelerator.device, non_blocking=True)
         data.video = data.video.to(accelerator.device, non_blocking=True)
-        mapper = Mappers(data.video.shape[-1], data.video.shape[-2], data.equirectangular_height[0], fov_x=fov_x)
+        mapper = Mappers(data.video.shape[-1], data.video.shape[-2], settings.gen_eq_height, fov_x=fov_x)
         vae, sam_pred_video, sam_pred_image, cotracker = get_models(settings.paths.sam_checkpoint, accelerator,
                                                                     accelerator.device, debug_skip_vae=False)
         vae = vae.eval()
@@ -82,7 +83,8 @@ def main(args, settings):
 
         with torch.no_grad():
             orig_pred_eq_frames_torch = _decode_pred_eq_frames(argus_latents, settings, vae)
-        orig_pred_eq_frames_torch = _resize_eq_frames(orig_pred_eq_frames_torch, new_shape=(1024, 2048))
+        orig_pred_eq_frames_torch = _resize_eq_frames(orig_pred_eq_frames_torch,
+                                                      new_shape=(settings.gen_eq_height, settings.gen_eq_height * 2))
 
         pred_eq_frames_torch = overlay_orig_persp_on_pred_eq(data, mapper, orig_pred_eq_frames_torch, rots)
 
@@ -103,8 +105,9 @@ def main(args, settings):
             first_mask_pred_out_dir = debug_vid_out_dir / "first_mask_pred"
             first_mask_pred_out_dir.mkdir(exist_ok=True)
             debug_vis = (data.video[0, 0].permute(1, 2, 0).cpu().numpy() * 255).astype(np.uint8).copy()
-            for pnt in pos_points:
-                cv2.circle(debug_vis, (pnt[0], pnt[1]), 3, (0, 0, 255), -1)
+            if pos_points is not None:
+                for pnt in pos_points:
+                    cv2.circle(debug_vis, (pnt[0], pnt[1]), 3, (0, 0, 255), -1)
             debug_vis = overlay_mask_over_image(debug_vis, first_mask)
             Image.fromarray(debug_vis).save(first_mask_pred_out_dir / "debug_vis.jpg")
 
@@ -130,6 +133,10 @@ def main(args, settings):
             for i, f in enumerate(obj_cnt_persp_imgs[0]):
                 debug_vis = (f.cpu().numpy()).astype(np.uint8).copy()
                 Image.fromarray(debug_vis).save(obj_centre_persp_imgs_out_dir / f"{i}.jpg")
+
+        if settings.ds_name == "lasot_oov":
+            print("STILL NEED TO DO FINAL STAGES FOR LASOT OOV")
+            continue
 
         query_frame_points = mapper.point.vc.to_ij(data.trajectory)[0, 0]
         query_frame_points = query_frame_points.flip(-1)

@@ -22,6 +22,7 @@ class CSGPUPaths:
     sam_checkpoint = Path(
         "/shared/storage/cs/staffstore/fgch500/pretrained_models/segmentation") / "sam2" / "sam2_hiera_large.pt"
     tapvid360_data_root = Path("/home/userfs/f/fgch500/storage/shared/TAPVid360/data")
+    lasot_data_root = Path("/home/userfs/f/fgch500/storage/datasets/tracking/object_tracking/LaSOT/custom_out_of_frame_clips")
 
 
 @dataclasses.dataclass
@@ -48,10 +49,8 @@ class Settings:
     local_paths = LocalPaths()
     paths = None # use set_host_in_settings to set
 
-    # ds_root = Path("/media/finlay/BigDaddyDrive/Datasets/tracking/object-tracking/LaSOT/custom_out_of_frame_clips")
-
-    force_get_latents = True
-    eq_height = 512  # TODO watchout this is currently hardcoded
+    argus_eq_height = 512
+    gen_eq_height = 1024
     weight_dtype = torch.float32
     decode_chunk_size = 10  # Should be able to be bigger for larger gpu's
     offload_to_cpu = True

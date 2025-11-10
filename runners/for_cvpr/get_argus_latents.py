@@ -3,6 +3,8 @@ import json
 from accelerate import Accelerator
 from tqdm import tqdm
 
+import numpy as np
+from PIL import Image
 import torch
 
 from conversions.mapper import Mappers
@@ -45,8 +47,9 @@ def create_argus_inputs(persp_video_frames, rotations, mapper):
 
     return conditional_video_equi, mask
 
+
 def get_latents(condition_video_persp, conditional_video_equi, mask, accelerator, settings, latents_dir,
-                 blend_frames=10, num_frames_batch=25):
+                blend_frames=10, num_frames_batch=25):
     if not latents_dir.exists() or settings.force_get_latents:
         conditional_video_equi = conditional_video_equi.to(settings.weight_dtype)
 
@@ -67,12 +70,14 @@ def get_latents(condition_video_persp, conditional_video_equi, mask, accelerator
 
     return argus_latents
 
+
 @torch.no_grad()
 def main(args, settings):
     if args.split_file is not None:
         with open(args.split_file, "r") as f:
             settings.specific_video_names = json.load(f)
-    dataset, dl = get_dataset(settings.paths.tapvid360_data_root, settings.ds_name, settings.specific_video_names)
+    ds_root = settings.paths.tapvid360_data_root if settings.ds_name == "tapvid360-10k" else settings.paths.lasot_data_root
+    dataset, dl = get_dataset(ds_root, settings.ds_name, settings.specific_video_names)
     accelerator = Accelerator(mixed_precision='no')
     for data in tqdm(dl):
         out_dir = settings.paths.out_root / "argus_feats" / settings.ds_name / data.seq_name[
@@ -81,11 +86,28 @@ def main(args, settings):
             print(f"Skipping {data.seq_name[0]} as latents already exist")
             continue
         data.video = data.video.to(accelerator.device, non_blocking=True)
-        data.rotations = data.rotations.to(accelerator.device, non_blocking=True)
         normed_vid = (data.video.float() * 2) - 1
-        R_w2c, fov_x = get_rotations(data, accelerator.device, use_gt=args.use_gt_rot)
-        mapper = Mappers(data.video.shape[-1], data.video.shape[-2], settings.eq_height, fov_x=fov_x)
+        if settings.ds_name == "tapvid360-10k":
+            data.rotations = data.rotations.to(accelerator.device, non_blocking=True)
+            R_w2c, fov_x = get_rotations(data, accelerator.device, use_gt=args.use_gt_rot)
+        else:
+            pose_runner = VGGTPoseRunner(device=accelerator.device)
+            pred_extrinsics, fov_x = pose_runner.run(data.video[0].permute(0, 2, 3, 1))
+            pred_rots = pose_runner.convert_to_tapvid360_format(pred_extrinsics[..., :3]).to(torch.float32)[0]
+            R_w2c = pose_runner.align_to_ground_truth_start_rotations(pred_rots, torch.eye(3).to(pred_rots[0].device))
+
+        mapper = Mappers(data.video.shape[-1], data.video.shape[-2], settings.argus_eq_height, fov_x=fov_x)
         input_eq_frames, input_masks = create_argus_inputs(data.video[0].permute(0, 2, 3, 1), R_w2c, mapper)
+        debug_vid_out_dir = settings.paths.out_root / "debugs" / settings.ds_name / data.seq_name[0]
+        if settings.ds_name == "tapvid360-10k":
+            debug_vid_out_dir /= f"gt_poses-{args.use_gt_rot}"
+        if args.debugs:
+            debug_vid_out_dir.mkdir(exist_ok=True, parents=True)
+            input_eq_frames_out_dir = debug_vid_out_dir / "input_eq_frames"
+            input_eq_frames_out_dir.mkdir(exist_ok=True)
+            for i, input_frame_non_norm in enumerate(input_eq_frames):
+                img = (((input_frame_non_norm + 1) / 2).permute(1, 2, 0) * 255).cpu().numpy().astype(np.uint8)
+                Image.fromarray(img).save(input_eq_frames_out_dir / f"{i}.jpg")
         out_dir.mkdir(exist_ok=True, parents=True)
         get_latents(normed_vid[0].clone(), input_eq_frames, input_masks, accelerator, settings, out_dir / "latents.pth")
         torch.save({"rotations": R_w2c.cpu(), "fov_x": fov_x}, out_dir / "rotations.pth")
