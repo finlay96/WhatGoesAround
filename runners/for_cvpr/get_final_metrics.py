@@ -8,4 +8,5 @@ if __name__ == "__main__":
     settings = set_host_in_settings(settings)
     for use_gt_rot in [True, False]:
         metrics_dir = settings.paths.out_root / "metrics" / f"gt_poses-{use_gt_rot}"
+        print(f"Getting metrics for {metrics_dir}")
         aggregate_metrics(metrics_dir)
