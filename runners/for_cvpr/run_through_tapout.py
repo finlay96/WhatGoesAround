@@ -13,17 +13,17 @@ from metrics.tapvid360_metrics import compute_metrics
 from runners.for_cvpr.settings import get_args, Settings, set_host_in_settings
 from runners.model_utils import SAMRunner, get_models
 from runners.run_argus_cotracker import _decode_pred_eq_frames, _resize_eq_frames, run_through_cotracker
-from runners.utils import overlay_orig_persp_on_pred_eq, get_dataset, get_object_centred_persp_imgs
+from runners.utils import overlay_orig_persp_on_pred_eq, get_dataset, get_object_centred_persp_imgs_with_interpolation
 from runners.vis_utils import overlay_mask_over_image
 
 
 def get_full_vid_eq_seg_masks(first_mask_eq, pred_eq_frames_torch, sam_runner):
     vid_seg_logits, vid_seg_confs = sam_runner.run_through_video(pred_eq_frames_torch,
                                                                  masks=first_mask_eq[None][None])
-    vid_seg_mean_above_conf = vid_seg_confs > 0.1
+    vid_seg_mean_above_conf = vid_seg_confs > 0.08
     # If no segmentation gets found we just have to estimate it to being all 1
-    is_all_zero_slice = (vid_seg_mean_above_conf.sum(dim=(-2, -1)) == 0)
-    vid_seg_mean_above_conf[is_all_zero_slice] = 1
+    # is_all_zero_slice = (vid_seg_mean_above_conf.sum(dim=(-2, -1)) == 0)
+    # vid_seg_mean_above_conf[is_all_zero_slice] = 1
     return vid_seg_mean_above_conf
 
 
@@ -124,9 +124,13 @@ def main(args, settings):
                 debug_vis = overlay_mask_over_image(debug_vis, vid_seg_mean_above_conf[0, i].cpu())
                 Image.fromarray(debug_vis).save(all_mask_preds_out_dir / f"{i}.jpg")
 
-        obj_cnt_persp_imgs, obj_cnt_rot_matrices = get_object_centred_persp_imgs(pred_eq_frames_torch,
-                                                                                 vid_seg_mean_above_conf,
-                                                                                 mapper, batchsize=1)
+        # TODO on frames it is not sure oon, we could try to do some interpolation of the masks based on nearby frames where we are sure
+        # obj_cnt_persp_imgs, obj_cnt_rot_matrices = get_object_centred_persp_imgs(pred_eq_frames_torch,
+        #                                                                          vid_seg_mean_above_conf,
+        #                                                                          mapper, batchsize=1)
+        obj_cnt_persp_imgs, obj_cnt_rot_matrices = get_object_centred_persp_imgs_with_interpolation(
+            pred_eq_frames_torch, vid_seg_mean_above_conf, mapper, batchsize=1)
+
         if args.debugs:
             obj_centre_persp_imgs_out_dir = debug_vid_out_dir / "obj_centre_persp_imgs"
             obj_centre_persp_imgs_out_dir.mkdir(exist_ok=True)
@@ -155,6 +159,20 @@ def main(args, settings):
 
         eq_points_pred = mapper.point.ij.to_cr(pred_tracks, obj_cnt_rot_matrices)
         pred_unit_vectors = mapper.point.cr.to_vc(eq_points_pred[0].to(rots.device), rots)
+
+        if args.debugs:
+            final_pred_vs_gt_points_out_dir = debug_vid_out_dir / "final_pred_vs_gt_points"
+            final_pred_vs_gt_points_out_dir.mkdir(exist_ok=True)
+            pred_points = mapper.point.vc.to_ij(pred_unit_vectors)
+            gt_points = mapper.point.vc.to_ij(data.trajectory)
+            for i, f in enumerate((data.video[0].permute(0, 2, 3, 1) * 255)):
+                debug_vis = (f.cpu().numpy()).astype(np.uint8).copy()
+                for pnt in pred_points[i]:
+                    cv2.circle(debug_vis, (int(pnt[0]), int(pnt[1])), 3, (0, 0, 255), -1)
+                for pnt in gt_points[0, i]:
+                    cv2.circle(debug_vis, (int(pnt[0]), int(pnt[1])), 3, (0, 255, 0), -1)
+                Image.fromarray(debug_vis).save(final_pred_vs_gt_points_out_dir / f"{i}.jpg")
+
         metrics = compute_metrics(pred_unit_vectors, data.trajectory[0], data.visibility[0])
         results_dir.mkdir(exist_ok=True, parents=True)
         metrics_dir.mkdir(exist_ok=True, parents=True)
