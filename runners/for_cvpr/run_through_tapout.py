@@ -105,7 +105,8 @@ def main(args, settings):
                 Image.fromarray(pred_eq_frame_torch.cpu().numpy().astype(np.uint8)).save(
                     pred_eq_frames_out_dir / f"{i}.jpg")
 
-        first_mask, pos_points = get_inital_frame_mask(data, dataset, sam_runner, mapper, every_x_points=5 if settings.ds_name == "tapvid360-10k" else 3)
+        first_mask, pos_points = get_inital_frame_mask(data, dataset, sam_runner, mapper,
+                                                       every_x_points=5 if settings.ds_name == "tapvid360-10k" else 3)
 
         if args.debugs:
             first_mask_pred_out_dir = debug_vid_out_dir / "first_mask_pred"
@@ -144,8 +145,9 @@ def main(args, settings):
                 vis_eq_pred = overlay_mask_over_image(vis_eq_pred, vid_seg_mean_above_conf[0, i].cpu().numpy())
                 persp_mask = mapper.image.equirectangular_image_to_perspective(vid_seg_mean_above_conf[:, i][..., None],
                                                                                rots[i])
-                vis_persp_pred = overlay_mask_over_image(gt_persp_frames[i], persp_mask[0, ... ,0].cpu().numpy())
-                vis_persp_pred = cv2.rectangle(vis_persp_pred, pred_vis_bboxes[i][:2], pred_vis_bboxes[i][2:], (0, 0, 255), 2)
+                vis_persp_pred = overlay_mask_over_image(gt_persp_frames[i], persp_mask[0, ..., 0].cpu().numpy())
+                vis_persp_pred = cv2.rectangle(vis_persp_pred, pred_vis_bboxes[i][:2], pred_vis_bboxes[i][2:],
+                                               (0, 0, 255), 2)
                 vis_persp_pred = cv2.rectangle(vis_persp_pred, gt_vis_bboxes[i][:2], gt_vis_bboxes[i][2:],
                                                (0, 255, 0), 2)
                 print("")
@@ -169,7 +171,8 @@ def main(args, settings):
         obj_cnt_persp_imgs, obj_cnt_rot_matrices = get_object_centred_persp_imgs_with_interpolation(
             pred_eq_frames_torch, vid_seg_mean_above_conf, mapper, batchsize=1)
 
-        cotracker_input_frames = torch.cat([data.video[:, 0:1].permute(0, 1, 3, 4, 2) * 255, obj_cnt_persp_imgs[:, 1:]], dim=1)
+        cotracker_input_frames = torch.cat([data.video[:, 0:1].permute(0, 1, 3, 4, 2) * 255, obj_cnt_persp_imgs[:, 1:]],
+                                           dim=1)
 
         if args.debugs:
             obj_centre_persp_imgs_out_dir = debug_vid_out_dir / "obj_centre_persp_imgs"
@@ -188,10 +191,11 @@ def main(args, settings):
                 cv2.circle(debug_vis, (int(pnt[0]), int(pnt[1])), 3, (0, 0, 255), -1)
             print("")
 
-
         cotracker.model = cotracker.model.to(device)
         pred_tracks, pred_vis = run_through_cotracker(cotracker, 1, device,
                                                       cotracker_input_frames, query_frame_points.flip(-1))
+        ct_tracks, ct_vis = run_through_cotracker(cotracker, 1, device,
+                                                  data.video.permute(0, 1, 3, 4, 2) * 255, query_frame_points.flip(-1))
         if args.debugs:
             obj_centre_persp_imgs_with_tracks_out_dir = debug_vid_out_dir / "obj_centre_persp_imgs_with_tracks"
             obj_centre_persp_imgs_with_tracks_out_dir.mkdir(exist_ok=True)
@@ -203,11 +207,16 @@ def main(args, settings):
 
         eq_points_pred = mapper.point.ij.to_cr(pred_tracks, obj_cnt_rot_matrices)
         pred_unit_vectors = mapper.point.cr.to_vc(eq_points_pred[0].to(rots.device), rots)
+        pred_unit_vectors[0] = data.trajectory[0, 0]  # first frame is given
+        pred_points = mapper.point.vc.to_ij(pred_unit_vectors)
+        pred_in_front_of_camera = ~(pred_unit_vectors[..., 0] < 0.1).any(1)
+        points_in_frame = (((pred_points[..., 0] < data.video.shape[-1]) & (
+                    pred_points[..., 1] < data.video.shape[-2])).all(-1)) & pred_in_front_of_camera
 
         if args.debugs:
             final_pred_vs_gt_points_out_dir = debug_vid_out_dir / "final_pred_vs_gt_points"
             final_pred_vs_gt_points_out_dir.mkdir(exist_ok=True)
-            pred_points = mapper.point.vc.to_ij(pred_unit_vectors)
+
             gt_points = mapper.point.vc.to_ij(data.trajectory)
             behind_camera = (data.trajectory[0, :, :, 0] < 0.1).any(1)
             for i, f in enumerate((data.video[0].permute(0, 2, 3, 1) * 255)):
@@ -219,7 +228,13 @@ def main(args, settings):
                         cv2.circle(debug_vis, (int(pnt[0]), int(pnt[1])), 3, (0, 255, 0), -1)
                 Image.fromarray(debug_vis).save(final_pred_vs_gt_points_out_dir / f"{i}.jpg")
 
-        metrics = compute_metrics(pred_unit_vectors, data.trajectory[0], data.visibility[0])
+        final_results = pred_unit_vectors.clone()
+        ct_preds = mapper.point.ij.to_vc(ct_tracks)
+        final_results[points_in_frame] = ct_preds[0, points_in_frame]
+
+        metrics = compute_metrics(final_results, data.trajectory[0], data.visibility[0])
+
+        # metrics = compute_metrics(pred_unit_vectors, data.trajectory[0], data.visibility[0])
         results_dir.mkdir(exist_ok=True, parents=True)
         metrics_dir.mkdir(exist_ok=True, parents=True)
         torch.save(pred_unit_vectors.cpu(), results_dir / f"{save_seq_name}.pth")
