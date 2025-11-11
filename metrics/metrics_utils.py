@@ -1,3 +1,4 @@
+import re
 from collections import defaultdict
 import json
 from pathlib import Path
@@ -15,7 +16,7 @@ def gen_metrics_and_dump(pred_tracks, sample, out_path):
             json.dump({m: metrics[m].mean().item() for m in metrics}, f, indent=4)
 
 
-def aggregate_metrics(metrics_dir: Path):
+def aggregate_metrics(metrics_dir: Path, specific_videos: None | list = None):
     """
     Loads all individual JSON metric files from a directory, aggregates them,
     and computes the final mean and standard deviation for each metric.
@@ -29,6 +30,14 @@ def aggregate_metrics(metrics_dir: Path):
 
     # Use glob to find all metric files, including in subdirectories
     json_files = list(metrics_dir.glob('**/*_metrics.json'))
+    if specific_videos is not None:
+        specific_json_files = []
+        for json_file in json_files:
+            name = json_file.stem.split("_metrics")[0]
+            result = re.sub(r"-(?!.*-)", "/", name)
+            if result in specific_videos:
+                specific_json_files.append(json_file)
+        json_files = specific_json_files
 
     if not json_files:
         print(f"Error: No '*_metrics.json' files found in '{metrics_dir}'")
