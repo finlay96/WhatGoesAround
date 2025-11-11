@@ -55,7 +55,6 @@ def main(args, settings):
     device = accelerator.device
     for data in tqdm(dl):
         assert len(data.seq_name) == 1, "Batch size greater than 1 not supported"
-        print("Running:", data.seq_name[0])
         latents_dir = settings.paths.out_root / "argus_feats" / settings.ds_name / data.seq_name[
             0] / f"gt_poses-{args.use_gt_rot}"
         assert latents_dir.exists(), f"Latents dir {latents_dir} does not exist"
@@ -69,6 +68,7 @@ def main(args, settings):
         if metrics_file_name.exists() and settings.skip_if_exists:
             print(f"Skipping {data.seq_name[0]} as metrics already exist")
             continue
+        print("Running:", data.seq_name[0])
         rotations_data = torch.load(latents_dir / "rotations.pth")
         fov_x = rotations_data["fov_x"]
         rots = rotations_data["rotations"].to(accelerator.device, non_blocking=True)
