@@ -10,6 +10,7 @@ import torch
 from conversions.mapper import Mappers
 from data.dataloader_lasot import LaSOTDataset
 from metrics.tapvid360_metrics import compute_metrics
+from runners.for_cvpr.lasot_utils import get_lasot_bboxes, get_lasot_scores
 from runners.for_cvpr.settings import get_args, Settings, set_host_in_settings
 from runners.model_utils import SAMRunner, get_models
 from runners.run_argus_cotracker import _decode_pred_eq_frames, _resize_eq_frames, run_through_cotracker
@@ -17,10 +18,10 @@ from runners.utils import overlay_orig_persp_on_pred_eq, get_dataset, get_object
 from runners.vis_utils import overlay_mask_over_image
 
 
-def get_full_vid_eq_seg_masks(first_mask_eq, pred_eq_frames_torch, sam_runner):
+def get_full_vid_eq_seg_masks(first_mask_eq, pred_eq_frames_torch, sam_runner, threshold=0.08):
     vid_seg_logits, vid_seg_confs = sam_runner.run_through_video(pred_eq_frames_torch,
                                                                  masks=first_mask_eq[None][None])
-    vid_seg_mean_above_conf = vid_seg_confs > 0.08
+    vid_seg_mean_above_conf = vid_seg_confs > threshold
     # If no segmentation gets found we just have to estimate it to being all 1
     # is_all_zero_slice = (vid_seg_mean_above_conf.sum(dim=(-2, -1)) == 0)
     # vid_seg_mean_above_conf[is_all_zero_slice] = 1
@@ -101,7 +102,7 @@ def main(args, settings):
                 Image.fromarray(pred_eq_frame_torch.cpu().numpy().astype(np.uint8)).save(
                     pred_eq_frames_out_dir / f"{i}.jpg")
 
-        first_mask, pos_points = get_inital_frame_mask(data, dataset, sam_runner, mapper, every_x_points=5)
+        first_mask, pos_points = get_inital_frame_mask(data, dataset, sam_runner, mapper, every_x_points=5 if settings.ds_name == "tapvid360-10k" else 3)
 
         if args.debugs:
             first_mask_pred_out_dir = debug_vid_out_dir / "first_mask_pred"
@@ -116,7 +117,8 @@ def main(args, settings):
         first_mask_eq_torch_, _ = mapper.image.perspective_image_to_equirectangular(
             torch.from_numpy(first_mask[None, ..., None]).to(rots.device), rots[0], interp_mode="nearest")
         first_mask_eq = first_mask_eq_torch_[0, ..., 0].to(bool)
-        vid_seg_mean_above_conf = get_full_vid_eq_seg_masks(first_mask_eq, pred_eq_frames_torch, sam_runner)
+        vid_seg_mean_above_conf = get_full_vid_eq_seg_masks(first_mask_eq, pred_eq_frames_torch, sam_runner,
+                                                            threshold=0.08 if settings.ds_name == "tapvid360-10k" else 0.005)
 
         if args.debugs:
             all_mask_preds_out_dir = debug_vid_out_dir / "all_mask_preds"
@@ -126,34 +128,71 @@ def main(args, settings):
                 debug_vis = overlay_mask_over_image(debug_vis, vid_seg_mean_above_conf[0, i].cpu())
                 Image.fromarray(debug_vis).save(all_mask_preds_out_dir / f"{i}.jpg")
 
+        if settings.ds_name == "lasot_oov":
+            print("STILL NEED TO DO FINAL STAGES FOR LASOT OOV")
+            pred_bboxes = get_lasot_bboxes(data, vid_seg_mean_above_conf, mapper, rots)
+            lasot_iou, lasot_pred_iou = get_lasot_scores(data, pred_bboxes)
+            gt_bboxes = data.bboxes_xyxy[0]
+            gt_persp_frames = (data.video[0].permute(0, 2, 3, 1).cpu().numpy() * 255).astype(np.uint8)
+            gt_vis_bboxes = gt_bboxes.cpu().numpy().astype(int)
+            pred_vis_bboxes = pred_bboxes.cpu().numpy().astype(int)
+            for i, eq_pred in enumerate(pred_eq_frames_torch):
+                vis_eq_pred = eq_pred.cpu().numpy()
+                vis_eq_pred = overlay_mask_over_image(vis_eq_pred, vid_seg_mean_above_conf[0, i].cpu().numpy())
+                persp_mask = mapper.image.equirectangular_image_to_perspective(vid_seg_mean_above_conf[:, i][..., None],
+                                                                               rots[i])
+                vis_persp_pred = overlay_mask_over_image(gt_persp_frames[i], persp_mask[0, ... ,0].cpu().numpy())
+                vis_persp_pred = cv2.rectangle(vis_persp_pred, pred_vis_bboxes[i][:2], pred_vis_bboxes[i][2:], (0, 0, 255), 2)
+                vis_persp_pred = cv2.rectangle(vis_persp_pred, gt_vis_bboxes[i][:2], gt_vis_bboxes[i][2:],
+                                               (0, 255, 0), 2)
+                print("")
+            # TODO NOW MAKE USEFUL VIS
+            gt_persp_frames = (data.video[0].permute(0, 2, 3, 1).cpu().numpy() * 255).astype(np.uint8)
+            gt_vis_bboxes = gt_bboxes.cpu().numpy().astype(int)
+            pred_vis_bboxes = pred_bboxes.cpu().numpy().astype(int)
+            for f_idx, frame in enumerate(gt_persp_frames):
+                vis_frame = frame.copy()
+                cv2.rectangle(vis_frame, gt_vis_bboxes[f_idx][:2], gt_vis_bboxes[f_idx][2:], (0, 255, 0), 2)
+                cv2.rectangle(vis_frame, pred_vis_bboxes[f_idx][:2], pred_vis_bboxes[f_idx][2:], (255, 0, 0), 2)
+                print("")
+
+            continue
+
         # TODO on frames it is not sure oon, we could try to do some interpolation of the masks based on nearby frames where we are sure
         # obj_cnt_persp_imgs, obj_cnt_rot_matrices = get_object_centred_persp_imgs(pred_eq_frames_torch,
         #                                                                          vid_seg_mean_above_conf,
         #                                                                          mapper, batchsize=1)
+        # TODO need to somehow use the original cotracker if points are in frame
         obj_cnt_persp_imgs, obj_cnt_rot_matrices = get_object_centred_persp_imgs_with_interpolation(
             pred_eq_frames_torch, vid_seg_mean_above_conf, mapper, batchsize=1)
+
+        cotracker_input_frames = torch.cat([data.video[:, 0:1].permute(0, 1, 3, 4, 2) * 255, obj_cnt_persp_imgs[:, 1:]], dim=1)
 
         if args.debugs:
             obj_centre_persp_imgs_out_dir = debug_vid_out_dir / "obj_centre_persp_imgs"
             obj_centre_persp_imgs_out_dir.mkdir(exist_ok=True)
-            for i, f in enumerate(obj_cnt_persp_imgs[0]):
+            for i, f in enumerate(cotracker_input_frames[0]):
                 debug_vis = (f.cpu().numpy()).astype(np.uint8).copy()
                 Image.fromarray(debug_vis).save(obj_centre_persp_imgs_out_dir / f"{i}.jpg")
 
-        if settings.ds_name == "lasot_oov":
-            print("STILL NEED TO DO FINAL STAGES FOR LASOT OOV")
-            continue
-
+        # TODO HOLD ON DONT WE NEED TO ADJUST THE POINTS BASED ON THE CROP WE DID FOR THE OBJECT CENTRED IMAGES
         query_frame_points = mapper.point.vc.to_ij(data.trajectory)[0, 0]
-        query_frame_points = query_frame_points.flip(-1)
+        if args.debugs:
+            # query_points_out_dir = debug_vid_out_dir / "query_points_out_dir"
+            # query_points_out_dir.mkdir(exist_ok=True)
+            debug_vis = (cotracker_input_frames[0][0].cpu().numpy()).astype(np.uint8).copy()
+            for pnt in query_frame_points:
+                cv2.circle(debug_vis, (int(pnt[0]), int(pnt[1])), 3, (0, 0, 255), -1)
+            print("")
+
+
         cotracker.model = cotracker.model.to(device)
         pred_tracks, pred_vis = run_through_cotracker(cotracker, 1, device,
-                                                      obj_cnt_persp_imgs, query_frame_points)
-
+                                                      cotracker_input_frames, query_frame_points.flip(-1))
         if args.debugs:
             obj_centre_persp_imgs_with_tracks_out_dir = debug_vid_out_dir / "obj_centre_persp_imgs_with_tracks"
             obj_centre_persp_imgs_with_tracks_out_dir.mkdir(exist_ok=True)
-            for i, f in enumerate(obj_cnt_persp_imgs[0]):
+            for i, f in enumerate(cotracker_input_frames[0]):
                 debug_vis = (f.cpu().numpy()).astype(np.uint8).copy()
                 for pnt in pred_tracks[0, i]:
                     cv2.circle(debug_vis, (int(pnt[0]), int(pnt[1])), 3, (0, 0, 255), -1)
