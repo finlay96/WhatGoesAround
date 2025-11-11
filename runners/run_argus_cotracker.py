@@ -347,7 +347,7 @@ def get_poses_and_equirectangular_inputs(accelerator, data, normed_vid, settings
     return R_w2c, conditional_video_equi, fov_x, mask
 
 
-def get_inital_frame_mask(data, dataset, sam_runner, mapper, every_x_points=10):
+def get_inital_frame_mask(data, dataset, sam_runner, mapper, every_x_points=10, with_debug=False):
     if isinstance(dataset, LaSOTDataset):
         pos_points, neg_points = None, None
         bbox_xyxy = data.bboxes_xyxy[:, 0].cpu().tolist()
