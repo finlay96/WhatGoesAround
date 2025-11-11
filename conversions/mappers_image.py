@@ -48,10 +48,11 @@ class MappersImage:
         r_normalized = (r / (self.cfg.equirectangular_height - 1)) * 2 - 1
         cr_normalized_grid = torch.stack([c_normalized, r_normalized], dim=-1)
 
+        mode = "bicubic" if equirectangular_images.shape[-1] == 3 else "nearest"
         perspective_images = torch.nn.functional.grid_sample(
             equirectangular_images.flatten(0, -4).permute(0, 3, 1, 2).float(),
             cr_normalized_grid.flatten(0, -4),
-            mode='bicubic', padding_mode='border',
+            mode=mode, padding_mode='border',
             align_corners=True).permute(0, 2, 3, 1)
         perspective_images = perspective_images.view(*equirectangular_images.shape[:-3], self.cfg.crop_height,
                                                      self.cfg.crop_width, -1)
