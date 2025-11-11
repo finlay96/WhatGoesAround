@@ -58,7 +58,10 @@ def main(args, settings):
         assert len(data.seq_name) == 1, "Batch size greater than 1 not supported"
         latents_dir = settings.paths.out_root / "argus_feats" / settings.ds_name / data.seq_name[
             0] / f"gt_poses-{args.use_gt_rot}"
-        assert latents_dir.exists(), f"Latents dir {latents_dir} does not exist"
+        # assert latents_dir.exists(), f"Latents dir {latents_dir} does not exist"
+        if not latents_dir.exists():
+            print(f"Skipping {data.seq_name[0]} as latents do not exist")
+            continue
         results_dir = settings.paths.out_root / "results" / settings.ds_name
         metrics_dir = settings.paths.out_root / "metrics" / settings.ds_name
         if settings.ds_name == "tapvid360-10k":
